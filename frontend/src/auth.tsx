@@ -72,5 +72,6 @@ export const useAuth = () => useContext(Ctx);
 export function homeRouteForRole(role?: string) {
   if (role === "agent") return "/(agent)/route";
   if (role === "admin") return "/(admin)/dashboard";
+  if (role === "manager") return "/(manager)/dashboard";
   return "/(customer)/home";
 }

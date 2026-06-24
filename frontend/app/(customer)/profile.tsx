@@ -16,6 +16,7 @@ export default function Profile() {
   useFocusEffect(useCallback(() => { refresh(); }, []));
 
   const menu = [
+    { key: "addresses", label: "Manage Addresses", Icon: MapPin, route: "/addresses" },
     { key: "autopay", label: "UPI AutoPay", Icon: Wallet, route: "/autopay" },
     { key: "billing", label: "Monthly Bill & Invoices", Icon: Receipt, route: "/billing" },
     { key: "coupons", label: "Coupons & Offers", Icon: Tag, route: "/coupons" },

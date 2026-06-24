@@ -1,15 +1,18 @@
 import { Tabs } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Truck, Clock, ChartBar } from "phosphor-react-native";
 import { colors, font } from "@/src/theme";
 
 export default function AgentLayout() {
+  const insets = useSafeAreaInsets();
+  const pb = insets.bottom > 0 ? insets.bottom : 12;
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.brandPrimary,
         tabBarInactiveTintColor: colors.muted,
-        tabBarStyle: { backgroundColor: colors.surfaceSecondary, borderTopColor: colors.border, height: 84, paddingTop: 8, paddingBottom: 28 },
+        tabBarStyle: { backgroundColor: colors.surfaceSecondary, borderTopColor: colors.border, height: 60 + pb, paddingTop: 8, paddingBottom: pb },
         tabBarLabelStyle: { fontFamily: font.medium, fontSize: 11 },
       }}
     >

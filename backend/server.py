@@ -92,6 +92,22 @@ def require_role(*roles):
     return checker
 
 
+def admin_or_manager(module: Optional[str] = None):
+    async def checker(user=Depends(get_current_user)):
+        if user["role"] == "admin":
+            return user
+        if user["role"] == "manager" and (module is None or user.get("permissions", {}).get(module)):
+            return user
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return checker
+
+
+async def strict_admin(user=Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    return user
+
+
 # ------------------------- Models -------------------------
 class SendOtp(BaseModel):
     phone: str
@@ -901,7 +917,7 @@ async def agent_performance(user=Depends(require_role("agent"))):
 
 # ------------------------- Admin endpoints -------------------------
 @api.get("/admin/dashboard")
-async def admin_dashboard(user=Depends(require_role("admin"))):
+async def admin_dashboard(user=Depends(admin_or_manager())):
     today = date.today().isoformat()
     total_customers = await db.users.count_documents({"role": "customer"})
     active_subs = await db.subscriptions.count_documents({"status": "active"})
@@ -941,7 +957,7 @@ async def admin_dashboard(user=Depends(require_role("admin"))):
 
 
 @api.get("/admin/customers")
-async def admin_customers(user=Depends(require_role("admin"))):
+async def admin_customers(user=Depends(admin_or_manager())):
     users = await db.users.find({"role": "customer"}).to_list(1000)
     out = []
     for u in users:
@@ -953,19 +969,19 @@ async def admin_customers(user=Depends(require_role("admin"))):
 
 
 @api.put("/admin/customers/{cid}/suspend")
-async def admin_suspend(cid: str, user=Depends(require_role("admin"))):
+async def admin_suspend(cid: str, user=Depends(admin_or_manager())):
     await db.users.update_one({"id": cid}, {"$set": {"suspended": True}})
     return {"status": "suspended"}
 
 
 @api.put("/admin/customers/{cid}/activate")
-async def admin_activate(cid: str, user=Depends(require_role("admin"))):
+async def admin_activate(cid: str, user=Depends(admin_or_manager())):
     await db.users.update_one({"id": cid}, {"$set": {"suspended": False}})
     return {"status": "active"}
 
 
 @api.get("/admin/orders")
-async def admin_orders(status: Optional[str] = None, user=Depends(require_role("admin"))):
+async def admin_orders(status: Optional[str] = None, user=Depends(admin_or_manager())):
     q = {}
     if status:
         q["status"] = status
@@ -974,7 +990,7 @@ async def admin_orders(status: Optional[str] = None, user=Depends(require_role("
 
 
 @api.put("/admin/orders/{oid}/status")
-async def admin_order_status(oid: str, body: DeliveryStatusIn, user=Depends(require_role("admin"))):
+async def admin_order_status(oid: str, body: DeliveryStatusIn, user=Depends(admin_or_manager())):
     s = body.status
     upd = {"status": s}
     if s in ["received", "packed", "out_for_delivery", "delivered"]:
@@ -984,14 +1000,14 @@ async def admin_order_status(oid: str, body: DeliveryStatusIn, user=Depends(requ
 
 
 @api.put("/admin/orders/{oid}/assign")
-async def admin_assign_order(oid: str, agent_id: str, user=Depends(require_role("admin"))):
+async def admin_assign_order(oid: str, agent_id: str, user=Depends(admin_or_manager())):
     await db.orders.update_one({"id": oid}, {"$set": {"agent_id": agent_id, "status": "out_for_delivery",
                                                       "tracking": build_tracking("out_for_delivery")}})
     return clean(await db.orders.find_one({"id": oid}))
 
 
 @api.get("/admin/agents")
-async def admin_agents(user=Depends(require_role("admin"))):
+async def admin_agents(user=Depends(admin_or_manager())):
     agents = await db.users.find({"role": "agent"}).to_list(200)
     out = []
     for a in agents:
@@ -1003,13 +1019,13 @@ async def admin_agents(user=Depends(require_role("admin"))):
 
 
 @api.get("/admin/products")
-async def admin_products(user=Depends(require_role("admin"))):
+async def admin_products(user=Depends(admin_or_manager())):
     items = await db.products.find({}).to_list(500)
     return [clean(p) for p in items]
 
 
 @api.post("/admin/products")
-async def admin_add_product(body: ProductIn, user=Depends(require_role("admin"))):
+async def admin_add_product(body: ProductIn, user=Depends(admin_or_manager())):
     p = body.model_dump()
     p["id"] = new_id()
     p["active"] = True
@@ -1018,19 +1034,19 @@ async def admin_add_product(body: ProductIn, user=Depends(require_role("admin"))
 
 
 @api.put("/admin/products/{pid}")
-async def admin_edit_product(pid: str, body: ProductIn, user=Depends(require_role("admin"))):
+async def admin_edit_product(pid: str, body: ProductIn, user=Depends(admin_or_manager())):
     await db.products.update_one({"id": pid}, {"$set": body.model_dump()})
     return clean(await db.products.find_one({"id": pid}))
 
 
 @api.delete("/admin/products/{pid}")
-async def admin_del_product(pid: str, user=Depends(require_role("admin"))):
+async def admin_del_product(pid: str, user=Depends(admin_or_manager())):
     await db.products.update_one({"id": pid}, {"$set": {"active": False}})
     return {"status": "disabled"}
 
 
 @api.get("/admin/inventory")
-async def admin_inventory(user=Depends(require_role("admin"))):
+async def admin_inventory(user=Depends(admin_or_manager())):
     items = await db.products.find({"active": True}).to_list(500)
     out = [{"id": p["id"], "name": p["name"], "type": p["type"], "stock": p.get("stock", 0),
             "price": p["price"]} for p in items]
@@ -1039,19 +1055,19 @@ async def admin_inventory(user=Depends(require_role("admin"))):
 
 
 @api.put("/admin/inventory/{pid}/stock")
-async def admin_update_stock(pid: str, stock: int, user=Depends(require_role("admin"))):
+async def admin_update_stock(pid: str, stock: int, user=Depends(admin_or_manager())):
     await db.products.update_one({"id": pid}, {"$set": {"stock": stock}})
     return {"status": "updated", "stock": stock}
 
 
 @api.get("/admin/referrals")
-async def admin_referrals(user=Depends(require_role("admin"))):
+async def admin_referrals(user=Depends(admin_or_manager())):
     refs = await db.referrals.find({}).to_list(1000)
     return [clean(r) for r in refs]
 
 
 @api.get("/admin/coupons")
-async def admin_coupons(user=Depends(require_role("admin"))):
+async def admin_coupons(user=Depends(admin_or_manager())):
     items = await db.coupons.find({}).to_list(200)
     return [clean(c) for c in items]
 
@@ -1066,7 +1082,7 @@ class CouponIn(BaseModel):
 
 
 @api.post("/admin/coupons")
-async def admin_add_coupon(body: CouponIn, user=Depends(require_role("admin"))):
+async def admin_add_coupon(body: CouponIn, user=Depends(admin_or_manager())):
     c = body.model_dump()
     c["code"] = c["code"].upper()
     c["id"] = new_id()
@@ -1077,19 +1093,19 @@ async def admin_add_coupon(body: CouponIn, user=Depends(require_role("admin"))):
 
 
 @api.get("/admin/tickets")
-async def admin_tickets(user=Depends(require_role("admin"))):
+async def admin_tickets(user=Depends(admin_or_manager())):
     t = await db.tickets.find({}).sort("created_at", -1).to_list(200)
     return [clean(x) for x in t]
 
 
 @api.put("/admin/tickets/{tid}/status")
-async def admin_ticket_status(tid: str, status: str, user=Depends(require_role("admin"))):
+async def admin_ticket_status(tid: str, status: str, user=Depends(admin_or_manager())):
     await db.tickets.update_one({"id": tid}, {"$set": {"status": status}})
     return clean(await db.tickets.find_one({"id": tid}))
 
 
 @api.get("/admin/ai-predictions")
-async def admin_ai_predictions(user=Depends(require_role("admin"))):
+async def admin_ai_predictions(user=Depends(strict_admin)):
     customers = await db.users.count_documents({"role": "customer"})
     subs = await db.subscriptions.count_documents({"status": "active"})
     prompt = (f"DairyNest has {customers} customers and {subs} active milk subscriptions. "
@@ -1101,6 +1117,59 @@ async def admin_ai_predictions(user=Depends(require_role("admin"))):
                 f"• Vegetable demand steady with weekend uptick. "
                 f"• Stock extra paneer & ghee ahead of festival season.")
     return {"forecast": text, "customers": customers, "active_subscriptions": subs}
+
+
+class ManagerIn(BaseModel):
+    name: str
+    phone: str
+    permissions: Dict[str, bool] = {}
+
+
+class PermIn(BaseModel):
+    permissions: Dict[str, bool]
+
+
+MANAGER_MODULES = ["customers", "orders", "products", "inventory", "marketing", "support", "reports"]
+
+
+@api.get("/manager/me")
+async def manager_me(user=Depends(get_current_user)):
+    return {"name": user["name"], "role": user["role"], "permissions": user.get("permissions", {}),
+            "modules": MANAGER_MODULES}
+
+
+@api.get("/admin/managers")
+async def list_managers(user=Depends(strict_admin)):
+    mgrs = await db.users.find({"role": "manager"}).to_list(200)
+    return [clean(m) for m in mgrs]
+
+
+@api.post("/admin/managers")
+async def create_manager(body: ManagerIn, user=Depends(strict_admin)):
+    if await db.users.find_one({"phone": body.phone}):
+        raise HTTPException(400, "Phone already registered")
+    uid = new_id()
+    m = {"id": uid, "role": "manager", "name": body.name, "phone": body.phone, "email": "",
+         "addresses": [], "default_address_id": None, "referral_code": gen_ref_code(body.name),
+         "referred_by_code": "", "suspended": False, "permissions": body.permissions,
+         "created_at": iso(now_utc()), "preferences": {"language": "English", "notifications": True}}
+    await db.users.insert_one(m)
+    return clean(m)
+
+
+@api.put("/admin/managers/{mid}/permissions")
+async def update_manager_perms(mid: str, body: PermIn, user=Depends(strict_admin)):
+    await db.users.update_one({"id": mid, "role": "manager"}, {"$set": {"permissions": body.permissions}})
+    return clean(await db.users.find_one({"id": mid}))
+
+
+@api.put("/admin/managers/{mid}/toggle")
+async def toggle_manager(mid: str, user=Depends(strict_admin)):
+    m = await db.users.find_one({"id": mid, "role": "manager"})
+    if not m:
+        raise HTTPException(404, "Not found")
+    await db.users.update_one({"id": mid}, {"$set": {"suspended": not m.get("suspended", False)}})
+    return clean(await db.users.find_one({"id": mid}))
 
 
 # ------------------------- Seed -------------------------
@@ -1172,6 +1241,8 @@ async def seed():
         {"phone": "9000000001", "name": "Neeraj Sharma", "role": "customer"},
         {"phone": "9000000002", "name": "Ramesh Kumar", "role": "agent", "employee_id": "DN-AGENT-01"},
         {"phone": "6398213389", "name": "Admin Boss", "role": "admin"},
+        {"phone": "9000000004", "name": "Manager Mary", "role": "manager",
+         "permissions": {"customers": True, "orders": True, "inventory": True, "support": True}},
     ]
     for d in demos:
         if not await db.users.find_one({"phone": d["phone"]}):
@@ -1183,6 +1254,8 @@ async def seed():
                  "created_at": iso(now_utc()), "preferences": {"language": "English", "notifications": True}}
             if d.get("employee_id"):
                 u["employee_id"] = d["employee_id"]
+            if d.get("permissions"):
+                u["permissions"] = d["permissions"]
             await db.users.insert_one(u)
             await db.referrals.update_one({"code": u["referral_code"]},
                                           {"$setOnInsert": {"code": u["referral_code"], "referrer_user_id": uid,
