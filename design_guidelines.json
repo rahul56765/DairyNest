@@ -1,0 +1,175 @@
+{
+  "app_name": "DairyNest",
+  "personality": "1 iOS-Native Clean with botanical palette (Fresh & natural organic vibe)",
+  "personality_one_liner": "A highly readable, premium iOS-native structure warmed by earthy greens, creams, and organic dairy-farm aesthetics.",
+  "color": {
+    "surface": "#FCFAF8",
+    "onSurface": "#1B2A1E",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1B2A1E",
+    "surfaceTertiary": "#F2EFEA",
+    "onSurfaceTertiary": "#2C4230",
+    "surfaceInverse": "#2C4230",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#5C7C54",
+    "brandPrimary": "#3A5940",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#D8E2D2",
+    "onBrandSecondary": "#2C4230",
+    "brandTertiary": "#F0F5ED",
+    "onBrandTertiary": "#3A5940",
+    "success": "#2D6A4F",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D4A373",
+    "onWarning": "#FFFFFF",
+    "error": "#B94D4D",
+    "onError": "#FFFFFF",
+    "info": "#4A6FA5",
+    "onInfo": "#FFFFFF",
+    "border": "#E8E5DF",
+    "borderStrong": "#C2CFC0",
+    "divider": "#E8E5DF"
+  },
+  "typography": {
+    "displayFontFamily": "Fraunces",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Use generous padding around content. Clear grouping of elements. Ensure bottom safe-area is respected, especially for sticky CTAs.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 1,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Apply to bottom tab bar when content scrolls behind it",
+      "Apply to sticky 'Subscribe' or 'Save' CTAs at the bottom of forms",
+      "Use as a frosted overlay on the Milk Subscription hero image",
+      "Ensure translucent tinted base underneath the glass is ≥70% of surface for readability"
+    ],
+    "dont's": [
+      "Never blur body text regions, form inputs, or basic list rows",
+      "Do not use on low-end Android devices (fallback to solid surfaceSecondary)"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Customer_Home",
+      "purpose": "Dashboard for daily deliveries and quick access to product catalogs.",
+      "states": {
+        "loading": "Centered spinner",
+        "empty": "Illustration of an empty milk basket + 'Your daily routine starts here.' + 'Browse Subscriptions' CTA",
+        "error": "Readable message + Retry button"
+      },
+      "layout": "Header with user greeting and notification icon. Hero banner featuring 'morning_milk_bottle' with a gradient scrim and 'Subscribe Now' text overlay. Quick actions grid (Add Milk, Order Veggies). Below: Today's Delivery Card (Morning/Evening split layout showing status: packed, out for delivery)."
+    },
+    {
+      "name": "Customer_Subscription_Config",
+      "purpose": "Detailed configuration for recurring milk delivery mandates.",
+      "states": {
+        "loading": "Skeleton of the form fields",
+        "empty": "N/A - This is a configuration screen",
+        "error": "Error loading product variants + Retry button"
+      },
+      "layout": "Large hero image of the specific milk type with gradient-to-dark scrim. Scrollable configuration: Segmented controls for Quantity (250ml, 500ml, 1L), Chips for Schedule (Morning, Evening, Both), Frequency picker. A sticky glassmorphic footer container holding the 'Set up UPI AutoPay' primary CTA above the bottom safe area."
+    },
+    {
+      "name": "Customer_AutoPay_Dashboard",
+      "purpose": "Overview of UPI AutoPay mandates and upcoming billing.",
+      "states": {
+        "loading": "Centered spinner",
+        "empty": "Illustration + 'No active mandates' + 'Setup AutoPay' CTA",
+        "error": "Readable message + Retry button"
+      },
+      "layout": "AI monthly estimate KPI card prominently at top (surfaceSecondary card with subtle brand gradient). List of active mandates with 'Pause'/'Revoke' secondary buttons. Upcoming debits timeline."
+    },
+    {
+      "name": "Delivery_Agent_Route",
+      "purpose": "Action-oriented task list for delivery agents.",
+      "states": {
+        "loading": "Centered spinner",
+        "empty": "Illustration of a parked delivery van + 'All deliveries complete!'",
+        "error": "Readable message + Retry button"
+      },
+      "layout": "Top sticky header with Today's Summary (Delivered/Pending/Failed). Main scroll view: List of delivery stops grouped by apartment/building. Each card shows customer name, flat number, items (e.g., '2L Cow Milk, 1kg Tomatoes'). Swipeable rows for quick 'Delivered' / 'Failed' actions."
+    },
+    {
+      "name": "Super_Admin_Dashboard",
+      "purpose": "High-level overview of business health.",
+      "states": {
+        "loading": "Skeleton loading for KPI grids",
+        "empty": "N/A",
+        "error": "Readable message + Retry button"
+      },
+      "layout": "Multi-column grid of KPI cards (Revenue, Active Subscriptions, Failed AutoPays). Cards fill horizontal space. Charts (sales trends) wrapped in surfaceSecondary containers. Scrollable list of recent issues/support tickets requiring attention at the bottom."
+    }
+  ],
+  "images": {
+    "morning_milk_bottle": {
+      "url": "https://images.unsplash.com/photo-1768850418252-37af725e46bb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwyfHxmcmVzaCUyMG1pbGslMjBnbGFzcyUyMGJvdHRsZSUyMGZhcm18ZW58MHx8fHwxNzgyMzIwNjYwfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Glass bottle of farm fresh milk on a wooden crate"
+    },
+    "organic_veggies_basket": {
+      "url": "https://images.unsplash.com/photo-1659822887922-c1386185cc6b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwxfHxvcmdhbmljJTIwdmVnZXRhYmxlcyUyMGJhc2tldCUyMGZhcm18ZW58MHx8fHwxNzgyMzIwNjYwfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Basket filled with fresh organic vegetables from farm"
+    },
+    "dairy_cow_pasture": {
+      "url": "https://images.unsplash.com/photo-1440428099904-c6d459a7e7b5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwxfHxkYWlyeSUyMGNvdyUyMG5hdHVyZSUyMG1vcm5pbmd8ZW58MHx8fHwxNzgyMzIwNjYwfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Herd of dairy cows on a green pasture in the morning"
+    }
+  },
+  "haptics": {
+    "events": {
+      "primary_button_press": "impactMedium",
+      "tab_change": "selection",
+      "delivery_swipe_action": "impactHeavy",
+      "quantity_chip_select": "impactLight",
+      "toggle_switch": "impactLight",
+      "error_toast": "notificationError",
+      "success_toast": "notificationSuccess"
+    }
+  },
+  "instructions_to_main_agent": [
+    "App contains 3 roles. Use a central authentication flow that routes the user to either the Customer App, Delivery Agent Panel, or Super Admin Panel based on their profile.",
+    "Implement the 'Fresh & natural' requested vibe by strictly adhering to the generated color tokens (creams and moss greens). DO NOT use blue, indigo, or purple anywhere.",
+    "Use Fraunces (weight 400/500 only) for Display/Headers and Plus Jakarta Sans for body text. Load via expo-font.",
+    "Ensure 'Customer_Subscription_Config' has a fixed sticky primary CTA ('Set up UPI AutoPay') at the bottom of the screen above the safe area, with content scrolling behind it. Use expo-blur for its container.",
+    "Delivery Agent app should prioritize scan-ability. Use large touch targets (minimum 44x44pt) and high contrast for outdoor readability.",
+    "Admin KPIs should use a multi-column grid layout with 'flexWrap: wrap' and 'justifyContent: space-between', avoiding left-clustered orphan cards.",
+    "Any image with text overlaid (like the Hero banners) MUST use the gradient-to-dark scrim pattern (transparent to >=70% surfaceInverse) to guarantee text legibility.",
+    "Implement haptics mapping provided in the JSON using expo-haptics. E.g., triggering 'impactHeavy' when a delivery agent swipes 'Delivered'."
+  ]
+}
