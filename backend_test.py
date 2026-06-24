@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Backend API test suite for DairyNest push notifications bug fix verification.
-Tests push token registration, notification history, admin broadcast, and auto-push on order events.
+Backend API test suite for DairyNest bug fix verification.
+Tests the critical bug fix: orders should stay in "received" status after payment,
+not automatically jump to "packed".
 """
 
 import requests
@@ -14,9 +15,7 @@ BASE_URL = "https://wonderful-feynman-7.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 CUSTOMER_PHONE = "9000000001"
-AGENT_PHONE = "9000000002"
 ADMIN_PHONE = "6398213389"
-MANAGER_PHONE = "9000000004"
 OTP_CODE = "123456"
 
 # Global state
@@ -25,10 +24,10 @@ user_data = {}
 test_results = []
 
 
-def log_test(step: int, description: str, passed: bool, details: str = ""):
+def log_test(step: str, description: str, passed: bool, details: str = ""):
     """Log test result"""
     status = "✅ PASS" if passed else "❌ FAIL"
-    result = f"Step {step}: {status} - {description}"
+    result = f"{step}: {status} - {description}"
     if details:
         result += f"\n  Details: {details}"
     print(result)
@@ -75,236 +74,21 @@ def get_headers(role: str) -> Dict[str, str]:
     }
 
 
-def test_push_registration():
-    """Test A: Push token registration"""
+def test_bug_fix_order_status():
+    """Test A: BUG FIX — order stays in 'received' until admin packs it [CRITICAL]"""
     print("\n" + "="*80)
-    print("TEST A: PUSH TOKEN REGISTRATION")
+    print("TEST A: BUG FIX — ORDER STAYS IN 'RECEIVED' UNTIL ADMIN PACKS IT")
     print("="*80)
     
-    # Step 1: Register valid token
-    token_value = "ExponentPushToken[test-customer-001]"
-    resp = requests.post(
-        f"{BASE_URL}/push/register",
-        headers=get_headers("customer"),
-        json={"token": token_value, "platform": "android"}
-    )
-    passed = resp.status_code == 200 and resp.json().get("status") == "registered"
-    log_test(1, "POST /api/push/register with valid token", passed, 
-             f"Status: {resp.status_code}, Response: {resp.json()}")
+    # Step 1: Login as customer (already done in main)
+    log_test("A.1", "Login as customer 9000000001", True, f"User: {user_data['customer'].get('name')}")
     
-    # Step 2: Verify token in user profile
-    resp = requests.get(f"{BASE_URL}/auth/me", headers=get_headers("customer"))
-    push_tokens = resp.json().get("push_tokens", [])
-    passed = resp.status_code == 200 and token_value in push_tokens
-    log_test(2, "GET /api/auth/me shows registered token", passed,
-             f"push_tokens: {push_tokens}")
-    
-    # Step 3: Register invalid token format
-    resp = requests.post(
-        f"{BASE_URL}/push/register",
-        headers=get_headers("customer"),
-        json={"token": "badformat", "platform": "android"}
-    )
-    data = resp.json()
-    passed = (resp.status_code == 200 and 
-              data.get("status") == "skipped" and 
-              data.get("reason") == "invalid_token_format")
-    log_test(3, "POST /api/push/register with invalid token format", passed,
-             f"Status: {resp.status_code}, Response: {data}")
-    
-    # Verify push_tokens unchanged
-    resp = requests.get(f"{BASE_URL}/auth/me", headers=get_headers("customer"))
-    new_tokens = resp.json().get("push_tokens", [])
-    passed = "badformat" not in new_tokens
-    log_test(3, "Invalid token not added to push_tokens", passed,
-             f"push_tokens: {new_tokens}")
-    
-    # Step 4: Register same token again (idempotent)
-    resp = requests.post(
-        f"{BASE_URL}/push/register",
-        headers=get_headers("customer"),
-        json={"token": token_value, "platform": "android"}
-    )
-    resp2 = requests.get(f"{BASE_URL}/auth/me", headers=get_headers("customer"))
-    final_tokens = resp2.json().get("push_tokens", [])
-    count = final_tokens.count(token_value)
-    passed = count == 1
-    log_test(4, "Duplicate token registration is idempotent", passed,
-             f"Token count: {count}, push_tokens: {final_tokens}")
-    
-    # Step 5: Unregister token
-    resp = requests.post(
-        f"{BASE_URL}/push/unregister",
-        headers=get_headers("customer"),
-        json={"token": token_value}
-    )
-    passed = resp.status_code == 200 and resp.json().get("status") == "unregistered"
-    log_test(5, "POST /api/push/unregister", passed,
-             f"Status: {resp.status_code}, Response: {resp.json()}")
-    
-    # Verify token removed
-    resp = requests.get(f"{BASE_URL}/auth/me", headers=get_headers("customer"))
-    final_tokens = resp.json().get("push_tokens", [])
-    passed = token_value not in final_tokens
-    log_test(5, "Token removed from push_tokens", passed,
-             f"push_tokens: {final_tokens}")
-
-
-def test_notification_history():
-    """Test B: Notification history endpoints"""
-    print("\n" + "="*80)
-    print("TEST B: NOTIFICATION HISTORY ENDPOINTS")
-    print("="*80)
-    
-    # Step 6: GET /api/notifications
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    passed = resp.status_code == 200 and isinstance(resp.json(), list)
-    log_test(6, "GET /api/notifications", passed,
-             f"Status: {resp.status_code}, Count: {len(resp.json())}")
-    
-    # Step 7: PUT /api/notifications/read-all
-    resp = requests.put(f"{BASE_URL}/notifications/read-all", headers=get_headers("customer"))
-    passed = resp.status_code == 200 and resp.json().get("status") == "ok"
-    log_test(7, "PUT /api/notifications/read-all", passed,
-             f"Status: {resp.status_code}, Response: {resp.json()}")
-
-
-def test_admin_broadcast():
-    """Test C: Admin broadcast"""
-    print("\n" + "="*80)
-    print("TEST C: ADMIN BROADCAST")
-    print("="*80)
-    
-    # Re-register customer push token for broadcast test
-    requests.post(
-        f"{BASE_URL}/push/register",
-        headers=get_headers("customer"),
-        json={"token": "ExponentPushToken[test-customer-001]", "platform": "android"}
-    )
-    
-    # Step 8: Admin broadcast to customers
-    resp = requests.post(
-        f"{BASE_URL}/admin/push/broadcast",
-        headers=get_headers("admin"),
-        json={"title": "Hello", "body": "Test msg", "target": "customer"}
-    )
-    data = resp.json()
-    passed = resp.status_code == 200 and data.get("recipients", 0) >= 1
-    log_test(8, "POST /api/admin/push/broadcast target=customer", passed,
-             f"Status: {resp.status_code}, sent: {data.get('sent')}, recipients: {data.get('recipients')}")
-    
-    # Step 9: Invalid target
-    resp = requests.post(
-        f"{BASE_URL}/admin/push/broadcast",
-        headers=get_headers("admin"),
-        json={"title": "X", "body": "Y", "target": "bogus"}
-    )
-    passed = resp.status_code == 400
-    log_test(9, "POST /api/admin/push/broadcast with invalid target", passed,
-             f"Status: {resp.status_code}, Response: {resp.json()}")
-    
-    # Step 10: Broadcast to all
-    resp = requests.post(
-        f"{BASE_URL}/admin/push/broadcast",
-        headers=get_headers("admin"),
-        json={"title": "Z", "body": "Q", "target": "all"}
-    )
-    data = resp.json()
-    passed = resp.status_code == 200 and data.get("recipients", 0) >= 1
-    log_test(10, "POST /api/admin/push/broadcast target=all", passed,
-             f"Status: {resp.status_code}, recipients: {data.get('recipients')}")
-    
-    # Step 11: Targeted broadcast with user_ids
-    customer_id = user_data["customer"]["id"]
-    resp = requests.post(
-        f"{BASE_URL}/admin/push/broadcast",
-        headers=get_headers("admin"),
-        json={"title": "Direct", "body": "You only", "target": "all", "user_ids": [customer_id]}
-    )
-    data = resp.json()
-    passed = resp.status_code == 200 and data.get("recipients") == 1
-    log_test(11, "POST /api/admin/push/broadcast with user_ids", passed,
-             f"Status: {resp.status_code}, recipients: {data.get('recipients')}")
-    
-    # Step 12: Verify broadcast notification in customer history
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    notifications = resp.json()
-    broadcast_notif = next((n for n in notifications if n.get("title") == "Hello" and 
-                           n.get("body") == "Test msg" and 
-                           n.get("data", {}).get("kind") == "broadcast"), None)
-    passed = broadcast_notif is not None
-    log_test(12, "Broadcast notification appears in customer history", passed,
-             f"Found: {broadcast_notif is not None}, Notification: {broadcast_notif}")
-
-
-def test_permission_gating():
-    """Test D: Permission gating on broadcast"""
-    print("\n" + "="*80)
-    print("TEST D: PERMISSION GATING ON BROADCAST")
-    print("="*80)
-    
-    # Step 13: Customer tries to broadcast (should fail)
-    resp = requests.post(
-        f"{BASE_URL}/admin/push/broadcast",
-        headers=get_headers("customer"),
-        json={"title": "x", "body": "y", "target": "all"}
-    )
-    passed = resp.status_code == 403
-    log_test(13, "Customer cannot broadcast (403)", passed,
-             f"Status: {resp.status_code}")
-    
-    # Step 14: Manager without marketing permission tries to broadcast
-    resp = requests.post(
-        f"{BASE_URL}/admin/push/broadcast",
-        headers=get_headers("manager"),
-        json={"title": "x", "body": "y", "target": "all"}
-    )
-    passed = resp.status_code == 403
-    log_test(14, "Manager without marketing permission cannot broadcast (403)", passed,
-             f"Status: {resp.status_code}")
-    
-    # Step 15: Admin grants marketing permission to manager
-    manager_id = user_data["manager"]["id"]
-    resp = requests.put(
-        f"{BASE_URL}/admin/managers/{manager_id}/permissions",
-        headers=get_headers("admin"),
-        json={"permissions": {
-            "customers": True,
-            "orders": True,
-            "inventory": True,
-            "support": True,
-            "marketing": True
-        }}
-    )
-    passed = resp.status_code == 200
-    log_test(15, "Admin grants marketing permission to manager", passed,
-             f"Status: {resp.status_code}")
-    
-    # Step 16: Manager with marketing permission can now broadcast
-    # Need to re-login to get new token with updated permissions
-    login(MANAGER_PHONE, "manager")
-    resp = requests.post(
-        f"{BASE_URL}/admin/push/broadcast",
-        headers=get_headers("manager"),
-        json={"title": "FromMgr", "body": "hey", "target": "customer"}
-    )
-    passed = resp.status_code == 200
-    log_test(16, "Manager with marketing permission can broadcast", passed,
-             f"Status: {resp.status_code}, Response: {resp.json()}")
-
-
-def test_order_auto_push():
-    """Test E: Auto-push on order events"""
-    print("\n" + "="*80)
-    print("TEST E: AUTO-PUSH ON ORDER EVENTS")
-    print("="*80)
-    
-    # Step 17: Add item to cart
+    # Step 2: Get a product and add to cart
     resp = requests.get(f"{BASE_URL}/products", headers=get_headers("customer"))
     products = resp.json()
     if not products:
-        log_test(17, "No products available for testing", False, "Cannot proceed with order tests")
-        return
+        log_test("A.2", "Get products for cart", False, "No products available")
+        return None
     
     product_id = products[0]["id"]
     resp = requests.post(
@@ -313,202 +97,520 @@ def test_order_auto_push():
         json={"product_id": product_id, "qty": 1}
     )
     passed = resp.status_code == 200
-    log_test(17, "Add product to cart", passed,
-             f"Status: {resp.status_code}, Product: {product_id}")
+    log_test("A.2", "POST /api/cart/add", passed, 
+             f"Status: {resp.status_code}, Product: {products[0].get('name')}")
     
-    # Step 18: Checkout order
+    if not passed:
+        return None
+    
+    # Step 3: Checkout order
     customer = user_data["customer"]
     address_id = customer.get("default_address_id")
     resp = requests.post(
         f"{BASE_URL}/orders/checkout",
         headers=get_headers("customer"),
-        json={"address_id": address_id, "slot": "morning", "payment_method": "cod"}
+        json={"address_id": address_id, "slot": "morning", "payment_method": "upi"}
     )
+    
     if resp.status_code != 200:
-        log_test(18, "Checkout order", False, f"Status: {resp.status_code}, Response: {resp.text}")
-        return
+        log_test("A.3", "POST /api/orders/checkout", False, 
+                f"Status: {resp.status_code}, Response: {resp.text}")
+        return None
     
-    order = resp.json().get("order")
+    checkout_data = resp.json()
+    order = checkout_data.get("order")
     order_id = order["id"]
-    passed = resp.status_code == 200
-    log_test(18, "POST /api/orders/checkout", passed,
-             f"Status: {resp.status_code}, Order ID: {order_id}")
     
-    # Step 19: Verify "Order Placed" notification
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    notifications = resp.json()
-    order_placed = next((n for n in notifications if "Order Placed" in n.get("title", "") and
-                        n.get("data", {}).get("order_id") == order_id), None)
-    passed = order_placed is not None
-    log_test(19, "Order Placed notification present", passed,
-             f"Found: {order_placed is not None}")
+    passed = (order.get("status") == "received" and 
+              order.get("payment_status") == "pending")
+    log_test("A.3", "POST /api/orders/checkout", passed,
+             f"Status: {resp.status_code}, Order ID: {order_id}, "
+             f"order.status={order.get('status')}, payment_status={order.get('payment_status')}")
     
-    # Step 20: Confirm payment
+    if not passed:
+        return None
+    
+    # Step 4: Confirm payment - CRITICAL TEST
     resp = requests.post(
         f"{BASE_URL}/orders/{order_id}/confirm-payment",
         headers=get_headers("customer")
     )
-    passed = resp.status_code == 200
-    log_test(20, "POST /api/orders/{order_id}/confirm-payment", passed,
-             f"Status: {resp.status_code}")
     
-    # Verify "Payment Confirmed" notification
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    notifications = resp.json()
-    payment_confirmed = next((n for n in notifications if "Payment Confirmed" in n.get("title", "")), None)
-    passed = payment_confirmed is not None
-    log_test(20, "Payment Confirmed notification present", passed,
-             f"Found: {payment_confirmed is not None}")
+    if resp.status_code != 200:
+        log_test("A.4", "POST /api/orders/{order_id}/confirm-payment", False,
+                f"Status: {resp.status_code}, Response: {resp.text}")
+        return None
     
-    # Step 21: Admin updates order status to "packed"
+    confirmed_order = resp.json()
+    
+    # CRITICAL ASSERTION: status must be "received", NOT "packed"
+    status_correct = confirmed_order.get("status") == "received"
+    payment_correct = confirmed_order.get("payment_status") == "paid"
+    
+    tracking = confirmed_order.get("tracking", [])
+    tracking_correct = False
+    if len(tracking) >= 2:
+        received_step = next((t for t in tracking if t.get("step") == "received"), None)
+        packed_step = next((t for t in tracking if t.get("step") == "packed"), None)
+        tracking_correct = (received_step and received_step.get("done") == True and
+                          packed_step and packed_step.get("done") == False)
+    
+    passed = status_correct and payment_correct and tracking_correct
+    log_test("A.4", "POST /api/orders/{order_id}/confirm-payment - CRITICAL", passed,
+             f"Status: {resp.status_code}, order.status={confirmed_order.get('status')} (MUST be 'received'), "
+             f"payment_status={confirmed_order.get('payment_status')} (MUST be 'paid'), "
+             f"tracking[0].done={tracking[0].get('done') if tracking else None}, "
+             f"tracking[1].done={tracking[1].get('done') if len(tracking) > 1 else None}")
+    
+    if not passed:
+        print(f"  ⚠️  BUG NOT FIXED: Order status is '{confirmed_order.get('status')}' instead of 'received'")
+        return None
+    
+    # Step 5: GET order to verify status persists
+    resp = requests.get(f"{BASE_URL}/orders/{order_id}", headers=get_headers("customer"))
+    order_check = resp.json()
+    passed = resp.status_code == 200 and order_check.get("status") == "received"
+    log_test("A.5", "GET /api/orders/{order_id} - status still 'received'", passed,
+             f"Status: {resp.status_code}, order.status={order_check.get('status')}")
+    
+    # Step 6: Login as admin and check received orders
+    log_test("A.6", "Login as admin 6398213389", True, f"User: {user_data['admin'].get('name')}")
+    
+    resp = requests.get(f"{BASE_URL}/admin/orders?status=received", headers=get_headers("admin"))
+    received_orders = resp.json()
+    order_in_list = any(o.get("id") == order_id for o in received_orders)
+    passed = resp.status_code == 200 and order_in_list
+    log_test("A.6", "GET /api/admin/orders?status=received - order MUST be present", passed,
+             f"Status: {resp.status_code}, Order found: {order_in_list}, "
+             f"Total received orders: {len(received_orders)}")
+    
+    if not passed:
+        print(f"  ⚠️  REGRESSION: Order {order_id} not in 'Received' tab (was the original bug)")
+    
+    # Step 7: Admin updates order status to "packed"
     resp = requests.put(
         f"{BASE_URL}/admin/orders/{order_id}/status",
         headers=get_headers("admin"),
         json={"status": "packed"}
     )
-    passed = resp.status_code == 200
-    log_test(21, "Admin updates order status to packed", passed,
+    packed_order = resp.json()
+    passed = resp.status_code == 200 and packed_order.get("status") == "packed"
+    log_test("A.7", "PUT /api/admin/orders/{order_id}/status to 'packed'", passed,
+             f"Status: {resp.status_code}, order.status={packed_order.get('status')}")
+    
+    # Step 8: Verify order appears in packed list
+    resp = requests.get(f"{BASE_URL}/admin/orders?status=packed", headers=get_headers("admin"))
+    packed_orders = resp.json()
+    order_in_packed = any(o.get("id") == order_id for o in packed_orders)
+    passed = resp.status_code == 200 and order_in_packed
+    log_test("A.8", "GET /api/admin/orders?status=packed - order present", passed,
+             f"Status: {resp.status_code}, Order found: {order_in_packed}")
+    
+    # Step 9: Verify order NOT in received list anymore
+    resp = requests.get(f"{BASE_URL}/admin/orders?status=received", headers=get_headers("admin"))
+    received_orders = resp.json()
+    order_not_in_received = not any(o.get("id") == order_id for o in received_orders)
+    passed = resp.status_code == 200 and order_not_in_received
+    log_test("A.9", "GET /api/admin/orders?status=received - order NOT present", passed,
+             f"Status: {resp.status_code}, Order found: {not order_not_in_received}")
+    
+    return order_id
+
+
+def test_app_settings():
+    """Test B: App settings endpoints"""
+    print("\n" + "="*80)
+    print("TEST B: APP SETTINGS ENDPOINTS")
+    print("="*80)
+    
+    # Step 10: GET /api/settings (public)
+    resp = requests.get(f"{BASE_URL}/settings")
+    settings = resp.json()
+    required_keys = ["first_order_discount_enabled", "first_order_discount_percent", 
+                     "first_order_discount_max", "subscription_first_amount", 
+                     "subscription_pricing_mode"]
+    has_keys = all(k in settings for k in required_keys)
+    passed = resp.status_code == 200 and has_keys
+    log_test("B.10", "GET /api/settings (public)", passed,
+             f"Status: {resp.status_code}, Keys present: {has_keys}, Settings: {json.dumps(settings, indent=2)}")
+    
+    # Step 11: GET /api/admin/settings as customer (should be 403)
+    resp = requests.get(f"{BASE_URL}/admin/settings", headers=get_headers("customer"))
+    passed = resp.status_code == 403
+    log_test("B.11", "GET /api/admin/settings as customer - 403", passed,
              f"Status: {resp.status_code}")
     
-    # Verify "Order Packed" notification
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    notifications = resp.json()
-    order_packed = next((n for n in notifications if "Order Packed" in n.get("title", "")), None)
-    passed = order_packed is not None
-    log_test(21, "Order Packed notification present", passed,
-             f"Found: {order_packed is not None}")
+    # Step 12: GET /api/admin/settings as admin (should be 200)
+    resp = requests.get(f"{BASE_URL}/admin/settings", headers=get_headers("admin"))
+    admin_settings = resp.json()
+    has_all_keys = all(k in admin_settings for k in required_keys + 
+                       ["subscription_regular_flat_amount", "min_order_for_first_discount"])
+    passed = resp.status_code == 200 and has_all_keys
+    log_test("B.12", "GET /api/admin/settings as admin - 200 with all fields", passed,
+             f"Status: {resp.status_code}, All keys present: {has_all_keys}")
     
-    # Step 22: Admin updates order status to "out_for_delivery"
+    # Step 13: PUT /api/admin/settings with valid data
     resp = requests.put(
-        f"{BASE_URL}/admin/orders/{order_id}/status",
+        f"{BASE_URL}/admin/settings",
         headers=get_headers("admin"),
-        json={"status": "out_for_delivery"}
+        json={"first_order_discount_percent": 25, "first_order_discount_max": 150}
     )
-    passed = resp.status_code == 200
-    log_test(22, "Admin updates order status to out_for_delivery", passed,
-             f"Status: {resp.status_code}")
+    updated_settings = resp.json()
+    values_correct = (updated_settings.get("first_order_discount_percent") == 25 and
+                     updated_settings.get("first_order_discount_max") == 150)
+    passed = resp.status_code == 200 and values_correct
+    log_test("B.13", "PUT /api/admin/settings with valid data", passed,
+             f"Status: {resp.status_code}, Values updated: {values_correct}, "
+             f"percent={updated_settings.get('first_order_discount_percent')}, "
+             f"max={updated_settings.get('first_order_discount_max')}")
     
-    # Verify "Out for Delivery" notification
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    notifications = resp.json()
-    out_for_delivery = next((n for n in notifications if "Out for Delivery" in n.get("title", "")), None)
-    passed = out_for_delivery is not None
-    log_test(22, "Out for Delivery notification present", passed,
-             f"Found: {out_for_delivery is not None}")
+    # Verify persistence
+    resp = requests.get(f"{BASE_URL}/admin/settings", headers=get_headers("admin"))
+    persisted = resp.json()
+    values_persisted = (persisted.get("first_order_discount_percent") == 25 and
+                       persisted.get("first_order_discount_max") == 150)
+    passed = values_persisted
+    log_test("B.13", "Settings persisted correctly", passed,
+             f"Persisted values: percent={persisted.get('first_order_discount_percent')}, "
+             f"max={persisted.get('first_order_discount_max')}")
     
-    # Step 23: Admin assigns order to agent
-    agent_id = user_data["agent"]["id"]
+    # Step 14: PUT /api/admin/settings with invalid subscription_pricing_mode
     resp = requests.put(
-        f"{BASE_URL}/admin/orders/{order_id}/assign",
+        f"{BASE_URL}/admin/settings",
         headers=get_headers("admin"),
-        params={"agent_id": agent_id}
+        json={"subscription_pricing_mode": "bogus"}
     )
-    passed = resp.status_code == 200
-    log_test(23, "Admin assigns order to agent", passed,
-             f"Status: {resp.status_code}")
+    passed = resp.status_code == 400
+    log_test("B.14", "PUT /api/admin/settings with invalid pricing_mode - 400", passed,
+             f"Status: {resp.status_code}, Response: {resp.json()}")
+
+
+def test_first_order_discount():
+    """Test C: First-order discount in checkout"""
+    print("\n" + "="*80)
+    print("TEST C: FIRST-ORDER DISCOUNT IN CHECKOUT")
+    print("="*80)
     
-    # Verify customer gets "Out for Delivery" notification
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    notifications = resp.json()
-    # Count "Out for Delivery" notifications (should have at least 2 now)
-    out_for_delivery_count = sum(1 for n in notifications if "Out for Delivery" in n.get("title", ""))
-    passed = out_for_delivery_count >= 2
-    log_test(23, "Customer gets another Out for Delivery notification", passed,
-             f"Count: {out_for_delivery_count}")
+    # First, restore settings to known state
+    requests.put(
+        f"{BASE_URL}/admin/settings",
+        headers=get_headers("admin"),
+        json={
+            "first_order_discount_enabled": True,
+            "first_order_discount_percent": 20,
+            "first_order_discount_max": 100
+        }
+    )
     
-    # Verify agent gets "New Delivery Assigned" notification
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("agent"))
-    agent_notifications = resp.json()
-    new_delivery = next((n for n in agent_notifications if "New Delivery Assigned" in n.get("title", "") and
-                        n.get("data", {}).get("order_id") == order_id), None)
-    passed = new_delivery is not None
-    log_test(23, "Agent gets New Delivery Assigned notification", passed,
-             f"Found: {new_delivery is not None}")
+    # Step 15: Create a new customer with fresh phone
+    import time
+    new_phone = f"91234{int(time.time()) % 100000:05d}"  # Generate unique phone
+    resp = requests.post(f"{BASE_URL}/auth/send-otp", json={"phone": new_phone})
+    resp = requests.post(f"{BASE_URL}/auth/verify-otp", json={"phone": new_phone, "code": OTP_CODE})
     
-    # Step 24: Agent marks order as delivered
+    if resp.status_code != 200:
+        log_test("C.15", "Create new customer", False, f"Status: {resp.status_code}, Response: {resp.text}")
+        return
+    
+    verify_data = resp.json()
+    
+    # If not registered, complete registration
+    if not verify_data.get("registered"):
+        resp = requests.post(
+            f"{BASE_URL}/auth/register",
+            json={
+                "phone": new_phone,
+                "name": "Test Customer 1",
+                "role": "customer",
+                "apartment": "Test Apartment",
+                "flat": "1A",
+                "floor": "1",
+                "landmark": "Near Test Mall",
+                "lat": 19.0760,
+                "lng": 72.8777
+            }
+        )
+        if resp.status_code != 200:
+            log_test("C.15", "Register new customer", False, f"Status: {resp.status_code}, Response: {resp.text}")
+            return
+        new_user_data = resp.json()
+    else:
+        new_user_data = verify_data
+    
+    new_token = new_user_data.get("token")
+    new_user = new_user_data.get("user")
+    
+    if not new_user or not new_token:
+        log_test("C.15", "Create new customer", False,
+                f"Response: {new_user_data}")
+        return
+    
+    passed = new_token is not None
+    log_test("C.15", f"Create new customer with phone {new_phone}", passed,
+             f"User ID: {new_user.get('id')}")
+    
+    if not passed:
+        return
+    
+    new_headers = {
+        "Authorization": f"Bearer {new_token}",
+        "Content-Type": "application/json"
+    }
+    
+    # Step 16: Add address for new customer
     resp = requests.post(
-        f"{BASE_URL}/agent/delivery/{order_id}/status",
-        headers=get_headers("agent"),
-        json={"status": "delivered", "otp": "1234", "photo": "photo_url", "note": "Delivered successfully"}
+        f"{BASE_URL}/addresses",
+        headers=new_headers,
+        json={"label": "Home", "apartment": "Test Apartment", "flat": "1A", "is_default": True}
     )
-    passed = resp.status_code == 200
-    log_test(24, "Agent marks order as delivered", passed,
-             f"Status: {resp.status_code}")
     
-    # Verify customer gets "Order Delivered" notification
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    notifications = resp.json()
-    order_delivered = next((n for n in notifications if "Order Delivered" in n.get("title", "")), None)
-    passed = order_delivered is not None
-    log_test(24, "Order Delivered notification present", passed,
-             f"Found: {order_delivered is not None}")
+    if resp.status_code != 200:
+        log_test("C.16", "Add address for new customer", False, f"Status: {resp.status_code}")
+        return
     
-    # Step 25: Admin marks order as failed
-    # First, create a new order for this test
+    updated_user = resp.json()
+    address_id = updated_user.get("default_address_id")
+    log_test("C.16", "Add address for new customer", True, f"Address ID: {address_id}")
+    
+    # Step 17: Add product to cart
+    resp = requests.get(f"{BASE_URL}/products", headers=new_headers)
+    products = resp.json()
+    if not products:
+        log_test("C.17", "Get products", False, "No products available")
+        return
+    
+    product_id = products[0]["id"]
     resp = requests.post(
         f"{BASE_URL}/cart/add",
-        headers=get_headers("customer"),
-        json={"product_id": product_id, "qty": 1}
+        headers=new_headers,
+        json={"product_id": product_id, "qty": 2}
     )
+    log_test("C.17", "Add product to cart", resp.status_code == 200, f"Status: {resp.status_code}")
+    
+    # Step 18: Checkout and verify first_order_bonus
     resp = requests.post(
         f"{BASE_URL}/orders/checkout",
-        headers=get_headers("customer"),
-        json={"address_id": address_id, "slot": "morning", "payment_method": "cod"}
+        headers=new_headers,
+        json={"address_id": address_id, "slot": "morning", "payment_method": "upi"}
     )
-    order2 = resp.json().get("order")
-    order2_id = order2["id"]
     
-    resp = requests.put(
-        f"{BASE_URL}/admin/orders/{order2_id}/status",
-        headers=get_headers("admin"),
-        json={"status": "failed"}
-    )
-    passed = resp.status_code == 200
-    log_test(25, "Admin marks order as failed", passed,
+    if resp.status_code != 200:
+        log_test("C.18", "Checkout with first-order discount", False,
+                f"Status: {resp.status_code}, Response: {resp.text}")
+        return
+    
+    checkout_data = resp.json()
+    first_order_bonus = checkout_data.get("first_order_bonus", 0)
+    order = checkout_data.get("order")
+    
+    bonus_applied = first_order_bonus > 0
+    order_bonus_matches = order.get("first_order_bonus") == first_order_bonus
+    discount_includes_bonus = order.get("discount") >= first_order_bonus
+    
+    passed = bonus_applied and order_bonus_matches and discount_includes_bonus
+    log_test("C.18", "Checkout applies first-order discount", passed,
+             f"Status: {resp.status_code}, first_order_bonus={first_order_bonus}, "
+             f"order.first_order_bonus={order.get('first_order_bonus')}, "
+             f"order.discount={order.get('discount')}, order.amount={order.get('amount')}")
+    
+    first_order_id = order["id"]
+    
+    # Step 19: Confirm payment so order counts as paid
+    resp = requests.post(f"{BASE_URL}/orders/{first_order_id}/confirm-payment", headers=new_headers)
+    log_test("C.19", "Confirm payment for first order", resp.status_code == 200,
              f"Status: {resp.status_code}")
     
-    # Verify customer gets "Delivery Failed" notification
-    resp = requests.get(f"{BASE_URL}/notifications", headers=get_headers("customer"))
-    notifications = resp.json()
-    delivery_failed = next((n for n in notifications if "Delivery Failed" in n.get("title", "") or
-                           "failed" in n.get("title", "").lower()), None)
-    passed = delivery_failed is not None
-    log_test(25, "Delivery Failed notification present", passed,
-             f"Found: {delivery_failed is not None}")
+    # Step 20: Add another product and checkout again (should NOT get discount)
+    resp = requests.post(
+        f"{BASE_URL}/cart/add",
+        headers=new_headers,
+        json={"product_id": product_id, "qty": 1}
+    )
+    
+    resp = requests.post(
+        f"{BASE_URL}/orders/checkout",
+        headers=new_headers,
+        json={"address_id": address_id, "slot": "morning", "payment_method": "upi"}
+    )
+    
+    if resp.status_code != 200:
+        log_test("C.20", "Second checkout - no repeat discount", False,
+                f"Status: {resp.status_code}, Response: {resp.text}")
+    else:
+        checkout_data2 = resp.json()
+        second_bonus = checkout_data2.get("first_order_bonus", 0)
+        passed = second_bonus == 0
+        log_test("C.20", "Second checkout - no repeat discount", passed,
+                f"Status: {resp.status_code}, first_order_bonus={second_bonus} (MUST be 0)")
+    
+    # Step 21: Admin disables first-order discount
+    resp = requests.put(
+        f"{BASE_URL}/admin/settings",
+        headers=get_headers("admin"),
+        json={"first_order_discount_enabled": False}
+    )
+    log_test("C.21", "Admin disables first-order discount", resp.status_code == 200,
+             f"Status: {resp.status_code}")
+    
+    # Step 22: Create ANOTHER new customer and verify no discount
+    new_phone2 = f"91234{int(time.time()) % 100000:05d}"  # Generate unique phone
+    resp = requests.post(f"{BASE_URL}/auth/send-otp", json={"phone": new_phone2})
+    resp = requests.post(f"{BASE_URL}/auth/verify-otp", json={"phone": new_phone2, "code": OTP_CODE})
+    
+    if resp.status_code != 200:
+        log_test("C.22", "Create another new customer", False, f"Status: {resp.status_code}")
+        return
+    
+    verify_data2 = resp.json()
+    
+    # If not registered, complete registration
+    if not verify_data2.get("registered"):
+        resp = requests.post(
+            f"{BASE_URL}/auth/register",
+            json={
+                "phone": new_phone2,
+                "name": "Test Customer 2",
+                "role": "customer",
+                "apartment": "Test Apartment 2",
+                "flat": "2B",
+                "floor": "2",
+                "landmark": "Near Test Park",
+                "lat": 19.0760,
+                "lng": 72.8777
+            }
+        )
+        if resp.status_code != 200:
+            log_test("C.22", "Register another new customer", False, f"Status: {resp.status_code}")
+            return
+        new_user_data2 = resp.json()
+    else:
+        new_user_data2 = verify_data2
+    
+    new_token2 = new_user_data2.get("token")
+    new_headers2 = {
+        "Authorization": f"Bearer {new_token2}",
+        "Content-Type": "application/json"
+    }
+    
+    # Get address from user
+    updated_user2 = new_user_data2.get("user")
+    address_id2 = updated_user2.get("default_address_id")
+    
+    # Add product and checkout
+    resp = requests.post(
+        f"{BASE_URL}/cart/add",
+        headers=new_headers2,
+        json={"product_id": product_id, "qty": 1}
+    )
+    
+    resp = requests.post(
+        f"{BASE_URL}/orders/checkout",
+        headers=new_headers2,
+        json={"address_id": address_id2, "slot": "morning", "payment_method": "upi"}
+    )
+    
+    if resp.status_code != 200:
+        log_test("C.22", "Checkout with discount disabled", False,
+                f"Status: {resp.status_code}, Response: {resp.text}")
+    else:
+        checkout_data3 = resp.json()
+        bonus_disabled = checkout_data3.get("first_order_bonus", 0)
+        passed = bonus_disabled == 0
+        log_test("C.22", "Checkout with discount disabled - no bonus", passed,
+                f"Status: {resp.status_code}, first_order_bonus={bonus_disabled} (MUST be 0)")
+    
+    # Step 23: Restore settings
+    resp = requests.put(
+        f"{BASE_URL}/admin/settings",
+        headers=get_headers("admin"),
+        json={
+            "first_order_discount_enabled": True,
+            "first_order_discount_percent": 20,
+            "first_order_discount_max": 100
+        }
+    )
+    log_test("C.23", "Restore first-order discount settings", resp.status_code == 200,
+             f"Status: {resp.status_code}")
+
+
+def test_multi_type_filter():
+    """Test D: Multi-type product filter"""
+    print("\n" + "="*80)
+    print("TEST D: MULTI-TYPE PRODUCT FILTER")
+    print("="*80)
+    
+    # Step 24: GET /api/products?type=fruit,vegetable
+    resp = requests.get(f"{BASE_URL}/products?type=fruit,vegetable")
+    products = resp.json()
+    
+    # Verify all products are either fruit or vegetable
+    all_correct_type = all(p.get("type") in ["fruit", "vegetable"] for p in products)
+    passed = resp.status_code == 200 and all_correct_type and len(products) > 0
+    log_test("D.24", "GET /api/products?type=fruit,vegetable", passed,
+             f"Status: {resp.status_code}, Count: {len(products)}, "
+             f"All correct type: {all_correct_type}, "
+             f"Types found: {set(p.get('type') for p in products)}")
+    
+    # Step 25: GET /api/products/categories?type=fruit,vegetable
+    resp = requests.get(f"{BASE_URL}/products/categories?type=fruit,vegetable")
+    categories = resp.json()
+    passed = resp.status_code == 200 and isinstance(categories, list) and len(categories) > 0
+    log_test("D.25", "GET /api/products/categories?type=fruit,vegetable", passed,
+             f"Status: {resp.status_code}, Categories: {categories}")
+    
+    # Step 26: GET /api/products?type=milk (single type, backward compat)
+    resp = requests.get(f"{BASE_URL}/products?type=milk")
+    milk_products = resp.json()
+    all_milk = all(p.get("type") == "milk" for p in milk_products)
+    passed = resp.status_code == 200 and all_milk and len(milk_products) > 0
+    log_test("D.26", "GET /api/products?type=milk (backward compat)", passed,
+             f"Status: {resp.status_code}, Count: {len(milk_products)}, All milk: {all_milk}")
+
+
+def test_payments_config():
+    """Test E: Payments config"""
+    print("\n" + "="*80)
+    print("TEST E: PAYMENTS CONFIG")
+    print("="*80)
+    
+    # Step 27: GET /api/payments/config
+    resp = requests.get(f"{BASE_URL}/payments/config")
+    config = resp.json()
+    
+    has_required_keys = all(k in config for k in ["razorpay_live", "razorpay_key_id", "currency"])
+    expected_values = (config.get("razorpay_live") == False and
+                      config.get("razorpay_key_id") is None and
+                      config.get("currency") == "INR")
+    
+    passed = resp.status_code == 200 and has_required_keys and expected_values
+    log_test("E.27", "GET /api/payments/config", passed,
+             f"Status: {resp.status_code}, Config: {json.dumps(config, indent=2)}")
 
 
 def main():
     """Main test runner"""
     print("="*80)
     print("DAIRYNEST BACKEND API TEST SUITE")
-    print("Push Notifications Bug Fix Verification")
+    print("Bug Fix Verification: Order Status Flow")
     print("="*80)
     
-    # Login all test users
+    # Login test users
     print("\n--- Logging in test users ---")
     if not login(CUSTOMER_PHONE, "customer"):
         print("❌ Failed to login customer. Aborting tests.")
-        sys.exit(1)
-    
-    if not login(AGENT_PHONE, "agent"):
-        print("❌ Failed to login agent. Aborting tests.")
         sys.exit(1)
     
     if not login(ADMIN_PHONE, "admin"):
         print("❌ Failed to login admin. Aborting tests.")
         sys.exit(1)
     
-    if not login(MANAGER_PHONE, "manager"):
-        print("❌ Failed to login manager. Aborting tests.")
-        sys.exit(1)
-    
     # Run test suites
     try:
-        test_push_registration()
-        test_notification_history()
-        test_admin_broadcast()
-        test_permission_gating()
-        test_order_auto_push()
+        test_bug_fix_order_status()
+        test_app_settings()
+        test_first_order_discount()
+        test_multi_type_filter()
+        test_payments_config()
     except Exception as e:
         print(f"\n❌ Test suite failed with exception: {e}")
         import traceback
@@ -527,12 +629,14 @@ def main():
     print(f"Failed: {failed} ❌")
     
     if failed > 0:
-        print("\nFailed tests:")
+        print("\n❌ FAILED TESTS:")
         for r in test_results:
             if not r["passed"]:
-                print(f"  - Step {r['step']}: {r['description']}")
+                print(f"  - {r['step']}: {r['description']}")
                 if r["details"]:
                     print(f"    {r['details']}")
+    else:
+        print("\n✅ ALL TESTS PASSED!")
     
     print("="*80)
     

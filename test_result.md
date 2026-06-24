@@ -103,15 +103,19 @@
 #====================================================================================================
 
 user_problem_statement: |
-  USER BUG REPORT:
-  - There are no push notifications. Add push notifications carefully.
-  - Admin should be able to send notifications. Every notification should vibrate the phone.
-  - Customers should automatically get push notifications on every order update.
-  - There is no logout option in admin, manager, delivery agent screens. Add them.
-  - Customer logout is also not working — fix it.
+  USER BUG: After a customer places an order, the order automatically jumps to "packed"
+  status. The "Received" tab on the admin order list is therefore always empty.
+
+  Plus feature work:
+  - Home should only show Milk + Fruits/Vegetables sections.
+  - Milk should support BOTH subscription AND single purchase.
+  - Rename "UPI AutoPay" → "AutoPay" everywhere (looks unprofessional otherwise).
+  - Checkout should route to Razorpay gateway (AutoPay or single payment).
+  - Admin should configure subscription AutoPay (e.g. first ₹1 order, regular amount,
+    first-time buyer discount).
 
 backend:
-  - task: "Push notifications: register / unregister / list / mark-read"
+  - task: "BUG: Order jumps to packed immediately after payment"
     implemented: true
     working: true
     file: "backend/server.py"
@@ -119,61 +123,37 @@ backend:
     priority: "high"
     needs_retesting: false
     status_history:
+      - user: "user"
+        comment: |
+          As soon as a customer places an order, it automatically goes to "packed"
+          and the order "Received" screen is empty always.
       - working: "NA"
         agent: "main"
         comment: |
-          Added endpoints:
-            POST /api/push/register  body: {token, platform}  (auth required)
-              - validates token starts with "ExponentPushToken"; $addToSet into user.push_tokens
-            POST /api/push/unregister body: {token}  (auth required)  -> $pull from user.push_tokens
-            GET /api/notifications  -> last 100 notifications for the user
-            PUT /api/notifications/{nid}/read  -> mark single read
-            PUT /api/notifications/read-all  -> mark all read
-          Helper: send_expo_push(tokens, title, body, data) posts to https://exp.host/--/api/v2/push/send with vibrate pattern + high priority + default channel.
-          Helper: notify_user(uid, title, body, data) and notify_role(role, ...) — both persist to db.notifications.
-      - working: true
-        agent: "testing"
-        comment: |
-          ✅ ALL TESTS PASSED (Steps 1-7):
-          - POST /api/push/register with valid ExponentPushToken → status: registered
-          - Token correctly added to user.push_tokens (verified via GET /api/auth/me)
-          - Invalid token format (not starting with "ExponentPushToken") → status: skipped, reason: invalid_token_format
-          - Invalid tokens NOT added to push_tokens array
-          - Duplicate token registration is idempotent (uses $addToSet correctly)
-          - POST /api/push/unregister → status: unregistered, token removed from push_tokens
-          - GET /api/notifications → 200, returns array
-          - PUT /api/notifications/read-all → status: ok (works even with empty notifications)
+          ROOT CAUSE FOUND: POST /api/orders/{oid}/confirm-payment was setting
+          status="packed" along with payment_status="paid". This caused every prepaid
+          order to skip the "received" stage entirely.
 
-  - task: "Push broadcast endpoint (admin/marketing-manager)"
-    implemented: true
-    working: true
-    file: "backend/server.py"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-      - working: "NA"
-        agent: "main"
-        comment: |
-          POST /api/admin/push/broadcast body: {title, body, target: "all"|"customer"|"agent"|"manager"|"admin", user_ids?}
-          Gate: admin_or_manager("marketing") — so admin OR a manager who has marketing permission can use it.
-          Returns {sent, recipients}.
-      - working: true
-        agent: "testing"
-        comment: |
-          ✅ ALL TESTS PASSED (Steps 8-16):
-          - Admin broadcast to customers → 200, recipients: 1 (sent to registered customer)
-          - Invalid target "bogus" → 400 with detail: "invalid target"
-          - Broadcast to "all" → 200, recipients: 8 (all users in DB)
-          - Targeted broadcast with user_ids → 200, recipients: 1 (exact match)
-          - Broadcast notification correctly persisted to db.notifications with kind=broadcast
-          - Customer role → 403 (correctly forbidden)
-          - Manager without marketing permission → 403 (correctly forbidden)
-          - Admin grants marketing permission to manager → 200
-          - Manager with marketing permission → 200 (now allowed to broadcast)
-          Permission gating working perfectly via admin_or_manager("marketing") dependency.
+          FIX: confirm-payment now only sets payment_status="paid". The order status
+          REMAINS "received" until an admin/manager explicitly moves it to "packed"
+          via PUT /api/admin/orders/{oid}/status. Tracking array also reflects "received".
 
-  - task: "Order events auto-push to customer/agent"
+          Notification copy updated: "Payment Confirmed 💳 ... Your order has been
+          received and will be packed shortly."
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ BUG FIX VERIFIED - All 9 test steps passed:
+          - Customer can place order (status="received", payment_status="pending")
+          - After confirm-payment: status stays "received" (NOT "packed"), payment_status="paid"
+          - Tracking array correct: received.done=true, packed.done=false
+          - Order appears in admin "Received" tab (regression fixed)
+          - Admin can manually move order to "packed"
+          - Order then appears in "Packed" tab and removed from "Received" tab
+          
+          The critical bug is FIXED. Orders no longer auto-jump to "packed" status.
+
+  - task: "Multi-type product filter (fruit + vegetable in one screen)"
     implemented: true
     working: true
     file: "backend/server.py"
@@ -184,68 +164,147 @@ backend:
       - working: "NA"
         agent: "main"
         comment: |
-          Hooked the following endpoints to notify_user automatically:
-            POST /api/orders/checkout            -> "Order Placed" -> customer
-            POST /api/orders/{oid}/confirm-payment -> "Payment Confirmed" -> customer
-            PUT  /api/admin/orders/{oid}/status  -> status-specific msg -> customer
-            PUT  /api/admin/orders/{oid}/assign  -> "Out for Delivery" -> customer + "New Delivery Assigned" -> agent
-            POST /api/agent/delivery/{oid}/status -> "Order Delivered" / "Delivery Attempt Failed" -> customer
-          When no push tokens registered, the calls still succeed (send_expo_push skips empty token list) and the notification row is logged to db.notifications so GET /api/notifications returns history.
+          GET /api/products and GET /api/products/categories now accept comma-separated
+          values in `type` (e.g. ?type=fruit,vegetable) and apply $in filtering.
+          Backward compatible with single-type calls.
       - working: true
         agent: "testing"
         comment: |
-          ✅ ALL TESTS PASSED (Steps 17-25):
-          - POST /api/orders/checkout → "Order Placed 🛒" notification created with kind=order, order_id
-          - POST /api/orders/{oid}/confirm-payment → "Payment Confirmed 💳" notification created
-          - PUT /api/admin/orders/{oid}/status (packed) → "Order Packed" notification created
-          - PUT /api/admin/orders/{oid}/status (out_for_delivery) → "Out for Delivery" notification created
-          - PUT /api/admin/orders/{oid}/assign → TWO notifications:
-            * Customer: "Out for Delivery" (second one)
-            * Agent: "New Delivery Assigned" with kind=assignment, order_id
-          - POST /api/agent/delivery/{oid}/status (delivered) → "Order Delivered ✅" notification created
-          - PUT /api/admin/orders/{oid}/status (failed) → "Delivery Failed" notification created
-          All order lifecycle events correctly trigger notify_user calls. Notifications persisted to db.notifications with proper metadata.
+          ✅ VERIFIED - All 3 test steps passed:
+          - GET /api/products?type=fruit,vegetable returns only fruit/vegetable products (8 items)
+          - GET /api/products/categories?type=fruit,vegetable returns union of categories
+          - GET /api/products?type=milk still works (backward compatible, 3 items)
+          
+          Multi-type filtering working correctly.
+
+  - task: "App settings (subscription AutoPay + first-order discount)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New app_settings collection (singleton, key="app_settings") with defaults:
+            subscription_first_amount=1.0 (₹1 trial)
+            subscription_pricing_mode="per_delivery"
+            subscription_regular_flat_amount=0.0
+            first_order_discount_enabled=True
+            first_order_discount_percent=20
+            first_order_discount_max=100
+            min_order_for_first_discount=0
+
+          Endpoints:
+            GET /api/settings (public; customer-safe subset)
+            GET /api/admin/settings (strict_admin)
+            PUT /api/admin/settings (strict_admin) — accepts partial SettingsIn
+
+          GET /api/payments/config — returns {razorpay_live, razorpay_key_id, currency}
+          so the client knows whether to open the Razorpay gateway or fall back to simulation.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ VERIFIED - All 6 test steps passed:
+          - GET /api/settings returns public fields (first_order_discount_*, subscription_*)
+          - GET /api/admin/settings as customer returns 403 (permission gating works)
+          - GET /api/admin/settings as admin returns 200 with all fields including internal ones
+          - PUT /api/admin/settings updates values correctly and persists them
+          - PUT /api/admin/settings with invalid subscription_pricing_mode returns 400
+          - GET /api/payments/config returns {razorpay_live: false, razorpay_key_id: null, currency: "INR"}
+          
+          All settings endpoints working correctly with proper permission gating.
+
+  - task: "Checkout auto-applies first-order discount"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          POST /api/orders/checkout now:
+            - Reads app_settings; if first_order_discount_enabled and the user has
+              ZERO prior orders with payment_status in ["paid","cod_pending"],
+              computes `bonus = min(subtotal * pct/100, max_off)`.
+            - Saves the order with `first_order_bonus`, increases `discount` by the
+              bonus, and reduces `amount` accordingly.
+            - Returns `first_order_bonus` in the response.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ VERIFIED - All 9 test steps passed:
+          - New customer (phone 9123445257) gets first-order discount: bonus=₹24 (20% of ₹120, capped at ₹100)
+          - Order amount correctly reduced: ₹135 - ₹24 = ₹111
+          - order.first_order_bonus and order.discount correctly set
+          - Second order by same customer gets NO discount (first_order_bonus=0)
+          - When admin disables first_order_discount_enabled, new customer gets NO discount
+          - Settings restored successfully
+          
+          First-order discount logic working correctly with proper eligibility checks.
 
 frontend:
-  - task: "Customer logout was not redirecting"
+  - task: "Home: only Milk + Fruits/Vegetables sections"
     implemented: true
     working: "NA"
-    file: "frontend/src/auth.tsx"
+    file: "frontend/app/(customer)/home.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Replaced 5-chip quick-action row with 2 big category cards:
+            - "Milk" → /catalog?type=milk
+            - "Fruits & Vegetables" → /catalog?type=fruit,vegetable
+          Pause / View Bill / separate Veg / Fruit removed from the home grid.
+
+  - task: "Milk: single purchase + subscribe toggle"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/milk-config.tsx, frontend/app/catalog.tsx"
     stuck_count: 0
     priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          milk-config.tsx now has a Segmented toggle "Subscribe daily" / "Buy once".
+          - Subscribe → existing flow (creates subscription, routes to /autopay)
+          - Buy once → POST /api/cart/add with chosen qty, routes to /cart
+          Catalog title supports milk type and comma-separated types.
+
+  - task: "Rename 'UPI AutoPay' → 'AutoPay'"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/(customer)/subscription.tsx, frontend/app/(customer)/profile.tsx, frontend/app/autopay.tsx, frontend/app/onboarding.tsx, frontend/app/milk-config.tsx"
+    stuck_count: 0
+    priority: "low"
     needs_retesting: false
     status_history:
       - user: "user"
-        comment: "Reported: customer logout not working."
+        comment: "don't write UPI AutoPay in app, it looks unprofessional"
       - working: "NA"
         agent: "main"
         comment: |
-          ROOT CAUSE: signOut() only cleared SecureStore + setUser(null) -- it never navigated away from the protected (customer)/(agent)/(admin)/(manager) screen, so the user stayed on a now-broken screen.
-          FIX: signOut() now ALSO calls router.replace("/login") (imported from expo-router) after clearing token.
-          BONUS: posts /api/push/unregister with the stored push token before clearing JWT.
-          Idempotent via signingOutRef guard.
+          All 5 occurrences replaced with just "AutoPay":
+            - subscription banner ("UPI AutoPay Active" → "AutoPay Active")
+            - profile menu entry
+            - autopay screen header + loading title
+            - onboarding slide copy
+            - milk-config bottom CTA ("Set up UPI AutoPay" → "Set up AutoPay")
 
-  - task: "Logout buttons present in admin/manager/agent screens"
+  - task: "Checkout opens Razorpay gateway when configured"
     implemented: true
     working: "NA"
-    file: "frontend/app/(admin)/more.tsx, frontend/app/(manager)/more.tsx, frontend/app/(agent)/route.tsx, frontend/app/(admin)/dashboard.tsx"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-      - user: "user"
-        comment: "Reported: there is no logout option in admin, manager, delivery agent."
-      - working: "NA"
-        agent: "main"
-        comment: |
-          - Admin "More" tab now has a bottom "Log Out" button (testID admin-more-logout) + the existing header SignOut on dashboard.
-          - Manager "More" tab now has a bottom "Log Out" button (testID manager-more-logout). Manager dashboard re-exports admin dashboard so its header SignOut also works.
-          - Agent already had a SignOut icon in the route header (testID agent-logout); now functional thanks to the auth.tsx fix.
-
-  - task: "Push notification client setup + permission + vibration"
-    implemented: true
-    working: "NA"
-    file: "frontend/src/hooks/use-push-notifications.tsx, frontend/app/_layout.tsx, frontend/app.json"
+    file: "frontend/app/checkout.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
@@ -253,23 +312,19 @@ frontend:
       - working: "NA"
         agent: "main"
         comment: |
-          Added expo-notifications + expo-device (via yarn expo install).
-          New <PushNotificationsGate /> mounted in root _layout.tsx:
-            - Requests permission once after login
-            - Gets ExponentPushToken via getExpoPushTokenAsync (Expo project id auto-discovered)
-            - POSTs /api/push/register so backend stores the token on user.push_tokens
-            - Sets foreground notification handler (banner + sound)
-            - addNotificationReceivedListener -> Vibration.vibrate([0,250,250,250]) on every incoming push
-            - Android channel "default" created with MAX importance + vibration pattern + green light + sound
-          app.json updated:
-            - "expo-notifications" plugin (icon, color, defaultChannel)
-            - Android permissions: VIBRATE, RECEIVE_BOOT_COMPLETED, WAKE_LOCK added
-          Web: expo-notifications logs a harmless warning; no crash. Native handles fully.
+          checkout.tsx now:
+            - Loads /api/payments/config + /api/settings on mount
+            - Shows "Secured by Razorpay" badge when keys are configured, "Demo mode"
+              when not (current env)
+            - If razorpay_live AND order.razorpay_order.id present → opens hosted
+              Razorpay checkout URL via expo-web-browser
+            - Else simulates (calls confirm-payment) with a clear toast message
+            - Previews the first-order discount inline on the bill card
 
-  - task: "Admin Notify broadcast UI"
+  - task: "Admin: app Settings tab"
     implemented: true
     working: "NA"
-    file: "frontend/src/components/management.tsx, frontend/app/(admin)/more.tsx, frontend/app/(manager)/more.tsx"
+    file: "frontend/src/components/management.tsx, frontend/app/(admin)/more.tsx"
     stuck_count: 0
     priority: "high"
     needs_retesting: false
@@ -277,19 +332,21 @@ frontend:
       - working: "NA"
         agent: "main"
         comment: |
-          New NotifyTab in management.tsx:
-            - Title + multiline body inputs
-            - Target selector chips: All / Customers / Agents / Managers / Admins
-            - "Send Notification" button -> POST /api/admin/push/broadcast
-            - Shows success toast with sent/recipients count
-          Wired into:
-            - Admin "More" -> always visible (testIDs nf-title, nf-body, nf-target-customer, nf-send)
-            - Manager "More" -> visible only if perms.marketing === true
+          New SettingsTab in management.tsx wired into Admin → More as the "Settings"
+          chip. Admin can edit:
+            - First AutoPay charge (₹)
+            - Pricing mode: per_delivery | flat
+            - Regular flat amount (shown only when mode=flat)
+            - Toggle first-order discount
+            - Discount percent
+            - Max discount ₹
+            - Minimum order ₹ to qualify
+          Calls PUT /api/admin/settings on save.
 
 metadata:
   created_by: "main_agent"
-  version: "1.3"
-  test_sequence: 3
+  version: "1.4"
+  test_sequence: 4
   run_ui: false
 
 test_plan:
@@ -301,67 +358,83 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Implemented full push notifications stack + fixed all logouts.
+      PRIMARY: verify the bug fix for "order goes straight to packed".
 
-      Backend additions to verify (use OTP 123456 for any phone):
-        1) Push registration (auth required):
-           - POST /api/push/register  body: {"token":"ExponentPushToken[abc123]","platform":"android"} as a customer -> {"status":"registered"}
-           - POST /api/push/register  body: {"token":"NotAValidToken","platform":"android"} -> {"status":"skipped","reason":"invalid_token_format"}  (no DB write)
-           - GET  /api/auth/me -> verify user.push_tokens contains the registered token (after a valid register)
-           - POST /api/push/unregister body: {"token":"ExponentPushToken[abc123]"} -> {"status":"unregistered"}; /api/auth/me no longer has that token
+      Use OTP "123456" for all logins. Demo accounts:
+        - Customer 9000000001
+        - Admin    6398213389
 
-        2) Notification history:
-           - GET /api/notifications -> 200, returns array (may be empty for fresh customer)
-           - Trigger an event (see #4) and re-GET /api/notifications -> new item present with title/body/data
-           - PUT /api/notifications/{nid}/read -> read=true
-           - PUT /api/notifications/read-all -> all read=true
+      BUG FIX VERIFICATION (highest priority):
+        1. Login as customer 9000000001.
+        2. POST /api/cart/add {"product_id":"<any-from-/api/products>","qty":1}
+        3. POST /api/orders/checkout {"address_id":"<addr>","slot":"morning","payment_method":"upi"}
+           → expect 200, order.status == "received", order.payment_status == "pending"
+        4. POST /api/orders/{order_id}/confirm-payment
+           → CRITICAL: expect order.status == "received" (NOT "packed"!),
+             payment_status == "paid", tracking[0].done==true and tracking[1].done==false
+        5. GET /api/orders/{order_id} → still status="received"
+        6. Login as admin 6398213389. GET /api/admin/orders?status=received
+           → the new order MUST appear in the list (regression of empty Received tab).
+        7. PUT /api/admin/orders/{order_id}/status {"status":"packed"}
+           → only now should status become "packed"
+        8. GET /api/admin/orders?status=packed → order present.
+        9. GET /api/admin/orders?status=received → order NOT present anymore.
 
-        3) Admin broadcast (auth as admin 6398213389):
-           - POST /api/admin/push/broadcast body {"title":"Hi","body":"Test","target":"customer"} -> {sent, recipients} with recipients>=1
-           - POST .../broadcast body {"title":"X","body":"Y","target":"bogus"} -> 400 invalid target
-           - POST .../broadcast as MANAGER 9000000004 (has marketing perm? -- by default seed Mary has customers/orders/inventory/support but NOT marketing; verify that): expect 403. Then have admin grant marketing perm and verify the same manager call returns 200.
-           - POST .../broadcast as CUSTOMER -> expect 403.
-           - POST .../broadcast with user_ids: [<customer_id>] -> recipients=1
+      APP SETTINGS:
+        10. GET /api/settings → 200, has first_order_discount_enabled etc.
+        11. GET /api/admin/settings as customer → 403
+        12. GET /api/admin/settings as admin → 200 with all keys
+        13. PUT /api/admin/settings {"first_order_discount_percent":25, "first_order_discount_max":150} → 200, updated
+        14. PUT /api/admin/settings {"subscription_pricing_mode":"bogus"} → 400
 
-        4) Order events triggering auto-push (verify GET /api/notifications afterwards):
-           - As customer: POST /api/cart  add a product, POST /api/orders/checkout {"address_id":<addr>,"slot":"morning","payment_method":"cod"} -> verify a "Order Placed" notification appears in GET /api/notifications.
-           - As customer: POST /api/orders/{oid}/confirm-payment -> "Payment Confirmed" notification.
-           - As admin:   PUT /api/admin/orders/{oid}/status body {"status":"packed"} -> customer gets "Order Packed".
-           - As admin:   PUT /api/admin/orders/{oid}/status body {"status":"out_for_delivery"} -> customer gets "Out for Delivery".
-           - As admin:   PUT /api/admin/orders/{oid}/assign?agent_id=<agentId> -> customer gets a notification AND the assigned agent's notifications now has "New Delivery Assigned".
-           - As agent:   POST /api/agent/delivery/{oid}/status body {"status":"delivered"} -> customer gets "Order Delivered ✅".
-           - As admin:   PUT /api/admin/orders/{oid}/status body {"status":"failed"} -> customer gets "Delivery Failed".
+      FIRST-ORDER DISCOUNT IN CHECKOUT:
+        15. Create a NEW customer (any unused phone) — they should have ZERO orders.
+            (use POST /api/auth/send-otp + verify-otp with code "123456"; this should create the user if new)
+        16. Add product, then POST /api/orders/checkout. Response should include
+            `first_order_bonus > 0` and the order.amount should be (cart.total - bonus).
+        17. Repeat checkout with same customer (after marking the first as paid) →
+            `first_order_bonus == 0` (no double discount).
+        18. PUT /api/admin/settings {"first_order_discount_enabled": false} → repeat checkout for
+            a different new customer → `first_order_bonus == 0` (disabled).
 
-      All notify calls should succeed even when the target user has no push_tokens registered (Expo Push API just won't be hit). The notification row in /api/notifications is the source of truth for the test.
+      MULTI-TYPE FILTER:
+        19. GET /api/products?type=fruit,vegetable → returns products whose type is fruit OR vegetable
+        20. GET /api/products/categories?type=fruit,vegetable → returns union of categories
+        21. GET /api/products?type=milk → still works (single type, backward compat)
 
-      No need to retest features from the previous round (managers, agents, coupons CRUD, address area_name) unless they regress.
-  
+      PAYMENTS CONFIG:
+        22. GET /api/payments/config → {razorpay_live: false, razorpay_key_id: null, currency: "INR"} (no keys configured in dev)
+
+      Report PASS/FAIL for each step with HTTP status & response excerpt.
   - agent: "testing"
     message: |
-      🎉 BACKEND TESTING COMPLETE - ALL 34 TESTS PASSED! 🎉
+      ✅ ALL BACKEND TESTS PASSED (29/29)
       
-      Comprehensive backend verification completed for push notifications bug fix.
+      Comprehensive testing completed for all 4 backend tasks:
       
-      TEST RESULTS SUMMARY:
-      ✅ Push token registration/unregistration (7 tests) - ALL PASSED
-      ✅ Notification history endpoints (2 tests) - ALL PASSED  
-      ✅ Admin broadcast functionality (5 tests) - ALL PASSED
-      ✅ Permission gating on broadcast (4 tests) - ALL PASSED
-      ✅ Auto-push on order events (16 tests) - ALL PASSED
+      A) BUG FIX - Order status flow (9 tests) ✅
+         - Orders stay in "received" after payment confirmation
+         - Admin "Received" tab now shows orders correctly
+         - Manual status transition to "packed" works
       
-      VERIFIED FUNCTIONALITY:
-      1. Push token registration validates ExponentPushToken format correctly
-      2. Invalid tokens are rejected without DB writes
-      3. Token registration is idempotent (uses $addToSet)
-      4. Token unregistration works correctly (uses $pull)
-      5. Notification history endpoints return proper data structures
-      6. Admin broadcast works for all target types (all, customer, agent, manager, admin)
-      7. Invalid broadcast targets return 400 errors
-      8. Permission gating correctly enforces admin_or_manager("marketing") dependency
-      9. All order lifecycle events trigger appropriate notifications:
-         - Order placed, payment confirmed, packed, out for delivery, delivered, failed
-      10. Agent assignment triggers notifications to both customer and agent
-      11. All notifications persist to db.notifications with proper metadata (kind, order_id, etc.)
-      12. Backend logs show successful Expo Push API calls (HTTP 200)
+      B) App settings endpoints (6 tests) ✅
+         - Public GET /api/settings works
+         - Admin GET/PUT /api/admin/settings with proper permission gating
+         - Settings validation and persistence working
+         - GET /api/payments/config returns correct values
       
-      NO ISSUES FOUND. All backend APIs working as expected.
+      C) First-order discount (9 tests) ✅
+         - New customers get discount automatically
+         - Repeat orders don't get discount
+         - Discount can be disabled via settings
+         - Discount calculation correct (20% up to ₹100)
+      
+      D) Multi-type product filter (3 tests) ✅
+         - Comma-separated types work (fruit,vegetable)
+         - Categories endpoint supports multi-type
+         - Backward compatible with single type
+      
+      E) Payments config (1 test) ✅
+         - Returns razorpay_live, razorpay_key_id, currency
+      
+      All backend APIs are working correctly. No issues found.

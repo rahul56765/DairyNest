@@ -20,7 +20,11 @@ export default function Catalog() {
   const [loading, setLoading] = useState(true);
   const [cartCount, setCartCount] = useState(0);
 
-  const title = ptype === "fruit" ? "Fresh Fruits" : "Organic Vegetables";
+  const title = ptype === "fruit" ? "Fresh Fruits"
+    : ptype === "milk" ? "Fresh Milk"
+    : ptype === "vegetable" ? "Organic Vegetables"
+    : (ptype || "").includes(",") ? "Fruits & Vegetables"
+    : "Catalog";
 
   useEffect(() => {
     (async () => {

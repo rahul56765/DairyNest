@@ -26,7 +26,7 @@ export default function AutoPay() {
   }, []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  if (!data) return <View style={{ flex: 1, backgroundColor: colors.surface }}><Header title="UPI AutoPay" back /><Loading /></View>;
+  if (!data) return <View style={{ flex: 1, backgroundColor: colors.surface }}><Header title="AutoPay" back /><Loading /></View>;
 
   const setup = async () => {
     setBusy(true);
@@ -46,7 +46,7 @@ export default function AutoPay() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
-      <Header title="UPI AutoPay" back />
+      <Header title="AutoPay" back />
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing["3xl"] }}>
         <Card style={styles.estCard}>
           <Row style={{ gap: spacing.sm }}>

@@ -8,6 +8,70 @@ import { Txt, Card, Loading, Row, Badge, Button, QtyStepper } from "@/src/compon
 
 export const MANAGER_MODULES = ["customers", "orders", "products", "inventory", "marketing", "support", "reports"];
 
+// ---------- App Settings (admin only) ----------
+export function SettingsTab() {
+  const toast = useToast();
+  const [s, setS] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.get("/admin/settings").then(setS).catch(() => {}); }, []);
+  if (!s) return <Loading />;
+  const set = (k: string, v: any) => setS({ ...s, [k]: v });
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await api.put("/admin/settings", {
+        subscription_first_amount: parseFloat(s.subscription_first_amount) || 0,
+        subscription_pricing_mode: s.subscription_pricing_mode,
+        subscription_regular_flat_amount: parseFloat(s.subscription_regular_flat_amount) || 0,
+        first_order_discount_enabled: !!s.first_order_discount_enabled,
+        first_order_discount_percent: parseInt(s.first_order_discount_percent) || 0,
+        first_order_discount_max: parseInt(s.first_order_discount_max) || 0,
+        min_order_for_first_discount: parseInt(s.min_order_for_first_discount) || 0,
+      });
+      setS(r);
+      toast.show("Settings saved", "success");
+    } catch (e: any) { toast.show(e.message, "error"); } finally { setBusy(false); }
+  };
+
+  return (
+    <View>
+      <Card style={{ marginBottom: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
+        <Txt weight="semibold">Subscription AutoPay</Txt>
+        <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>Configure trial amount and regular charges.</Txt>
+      </Card>
+      <FormField label="First AutoPay charge (₹)" testID="set-first-amt" value={String(s.subscription_first_amount ?? "")} onChange={(v) => set("subscription_first_amount", v)} keyboardType="numeric" />
+      <Txt size={type.sm} color={colors.muted} style={{ marginBottom: 4 }}>Regular pricing mode</Txt>
+      <Row style={{ gap: spacing.sm, marginBottom: spacing.md }}>
+        {["per_delivery", "flat"].map((k) => (
+          <Pressable key={k} testID={`set-mode-${k}`} onPress={() => set("subscription_pricing_mode", k)} style={[styles.typePill, s.subscription_pricing_mode === k && styles.typePillActive, { flex: 1 }]}>
+            <Txt weight="semibold" size={type.sm} color={s.subscription_pricing_mode === k ? colors.onBrandPrimary : colors.onSurface}>{k === "per_delivery" ? "Per delivery" : "Flat ₹"}</Txt>
+          </Pressable>
+        ))}
+      </Row>
+      {s.subscription_pricing_mode === "flat" && (
+        <FormField label="Regular flat amount per cycle (₹)" testID="set-flat" value={String(s.subscription_regular_flat_amount ?? "")} onChange={(v) => set("subscription_regular_flat_amount", v)} keyboardType="numeric" />
+      )}
+
+      <Card style={{ marginVertical: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
+        <Txt weight="semibold">First-time Buyer Offer</Txt>
+        <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>Discount auto-applied on the first order.</Txt>
+      </Card>
+      <Pressable testID="set-firstoff-toggle" onPress={() => set("first_order_discount_enabled", !s.first_order_discount_enabled)} style={[styles.permRow, { paddingHorizontal: 4 }]}>
+        <View style={[styles.checkbox, s.first_order_discount_enabled && styles.checkboxOn]}>
+          {s.first_order_discount_enabled && <Check size={14} color={colors.onBrandPrimary} weight="bold" />}
+        </View>
+        <Txt weight="medium" style={{ flex: 1 }}>Enable first-order discount</Txt>
+      </Pressable>
+      <FormField label="Discount %" testID="set-pct" value={String(s.first_order_discount_percent ?? "")} onChange={(v) => set("first_order_discount_percent", v)} keyboardType="numeric" />
+      <FormField label="Max discount (₹)" testID="set-max" value={String(s.first_order_discount_max ?? "")} onChange={(v) => set("first_order_discount_max", v)} keyboardType="numeric" />
+      <FormField label="Minimum order (₹) to qualify" testID="set-min" value={String(s.min_order_for_first_discount ?? "")} onChange={(v) => set("min_order_for_first_discount", v)} keyboardType="numeric" />
+
+      <Button title="Save Settings" loading={busy} onPress={save} testID="set-save" style={{ marginTop: spacing.md }} />
+    </View>
+  );
+}
+
 // ---------- Send Push Notification (admin + marketing-perm manager) ----------
 export function NotifyTab() {
   const toast = useToast();

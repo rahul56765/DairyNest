@@ -441,7 +441,12 @@ async def del_address(addr_id: str, user=Depends(get_current_user)):
 async def list_products(type: Optional[str] = None, category: Optional[str] = None):
     q = {"active": True}
     if type:
-        q["type"] = type
+        # support comma-separated types e.g. "fruit,vegetable"
+        parts = [t.strip() for t in type.split(",") if t.strip()]
+        if len(parts) == 1:
+            q["type"] = parts[0]
+        elif len(parts) > 1:
+            q["type"] = {"$in": parts}
     if category:
         q["category"] = category
     items = await db.products.find(q).to_list(500)
@@ -452,7 +457,11 @@ async def list_products(type: Optional[str] = None, category: Optional[str] = No
 async def product_categories(type: Optional[str] = None):
     q = {"active": True}
     if type:
-        q["type"] = type
+        parts = [t.strip() for t in type.split(",") if t.strip()]
+        if len(parts) == 1:
+            q["type"] = parts[0]
+        elif len(parts) > 1:
+            q["type"] = {"$in": parts}
     items = await db.products.find(q).to_list(500)
     cats = sorted({p["category"] for p in items})
     return cats
@@ -725,6 +734,23 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
     oid = new_id()
     addr_id = body.address_id or user.get("default_address_id")
     addr = next((a for a in user.get("addresses", []) if a["id"] == addr_id), None)
+
+    # First-order discount: only when settings enabled AND user has no prior PAID order
+    settings = await get_app_settings()
+    first_order_bonus = 0.0
+    if settings.get("first_order_discount_enabled"):
+        prior_paid = await db.orders.count_documents({
+            "user_id": user["id"],
+            "payment_status": {"$in": ["paid", "cod_pending"]},
+        })
+        if prior_paid == 0 and summary["subtotal"] >= settings.get("min_order_for_first_discount", 0):
+            pct = max(0, min(100, int(settings.get("first_order_discount_percent", 0))))
+            max_off = float(settings.get("first_order_discount_max", 0) or 0)
+            raw_off = round(summary["subtotal"] * pct / 100.0, 2)
+            first_order_bonus = min(raw_off, max_off) if max_off > 0 else raw_off
+
+    final_total = max(0.0, round(summary["total"] - first_order_bonus, 2))
+
     razorpay_order = None
     payment_status = "pending"
     if body.payment_method == "cod":
@@ -734,7 +760,7 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
             import razorpay
             rc = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
             razorpay_order = rc.order.create({
-                "amount": int(summary["total"] * 100),
+                "amount": int(final_total * 100),
                 "currency": "INR",
                 "payment_capture": 1,
                 "receipt": oid[:40],
@@ -747,8 +773,9 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
         "items": summary["items"],
         "subtotal": summary["subtotal"],
         "delivery_charge": summary["delivery_charge"],
-        "discount": summary["discount"],
-        "amount": summary["total"],
+        "discount": summary["discount"] + first_order_bonus,
+        "first_order_bonus": first_order_bonus,
+        "amount": final_total,
         "slot": body.slot,
         "payment_method": body.payment_method,
         "payment_status": payment_status,
@@ -765,10 +792,10 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
     await db.carts.update_one({"user_id": user["id"]}, {"$set": {"items": [], "coupon": None}})
     # Notify customer their order was placed
     await notify_user(user["id"], "Order Placed 🛒",
-                      f"Order #{oid[:8].upper()} received — total ₹{summary['total']}",
+                      f"Order #{oid[:8].upper()} received — total ₹{final_total}",
                       {"kind": "order", "order_id": oid, "status": "received"})
     return {"order": clean(order), "razorpay_key_id": RAZORPAY_KEY_ID if RAZORPAY_LIVE else None,
-            "simulated": not RAZORPAY_LIVE}
+            "simulated": not RAZORPAY_LIVE, "first_order_bonus": first_order_bonus}
 
 
 @api.post("/orders/{oid}/confirm-payment")
@@ -776,16 +803,22 @@ async def confirm_payment(oid: str, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": oid, "user_id": user["id"]})
     if not order:
         raise HTTPException(404, "Order not found")
-    await db.orders.update_one({"id": oid}, {"$set": {"payment_status": "paid", "status": "packed",
-                                                       "tracking": build_tracking("packed")}})
+    # FIX: payment confirmation only flips payment_status to "paid".
+    # The order MUST stay in "received" until admin/staff explicitly marks it packed.
+    # Previously we set status="packed" here which made the Admin "Received" tab always look empty
+    # because every prepaid order skipped that stage.
+    await db.orders.update_one(
+        {"id": oid},
+        {"$set": {"payment_status": "paid", "status": "received", "tracking": build_tracking("received")}},
+    )
     # referral: first paid order
     if user.get("referred_by_code"):
         await db.referrals.update_one({"code": user["referred_by_code"]},
                                       {"$inc": {"paid_orders": 1, "reward_amount": 50}})
     # Notify customer payment confirmed
     await notify_user(user["id"], "Payment Confirmed 💳",
-                      f"Payment received for order #{oid[:8].upper()}. We're packing your items.",
-                      {"kind": "order", "order_id": oid, "status": "packed"})
+                      f"Payment received for order #{oid[:8].upper()}. Your order has been received and will be packed shortly.",
+                      {"kind": "order", "order_id": oid, "status": "received"})
     return clean(await db.orders.find_one({"id": oid}))
 
 
@@ -1283,6 +1316,81 @@ async def admin_push_broadcast(body: BroadcastIn, user=Depends(admin_or_manager(
     if body.target not in {"all", "customer", "agent", "manager", "admin"}:
         raise HTTPException(400, "invalid target")
     return await notify_role(body.target, body.title, body.body, {"kind": "broadcast"})
+
+
+# ------------------- App Settings -------------------
+SETTINGS_KEY = "app_settings"
+
+
+def _default_settings():
+    return {
+        "key": SETTINGS_KEY,
+        "subscription_first_amount": 1.0,           # first AutoPay charge (e.g. ₹1 trial)
+        "subscription_pricing_mode": "per_delivery",  # per_delivery | flat
+        "subscription_regular_flat_amount": 0.0,    # used when pricing_mode == flat
+        "first_order_discount_enabled": True,
+        "first_order_discount_percent": 20,
+        "first_order_discount_max": 100,            # max ₹ off
+        "min_order_for_first_discount": 0,
+        "updated_at": iso(now_utc()),
+    }
+
+
+async def get_app_settings():
+    s = await db.app_settings.find_one({"key": SETTINGS_KEY})
+    if not s:
+        s = _default_settings()
+        await db.app_settings.insert_one(s)
+    return clean(s)
+
+
+@api.get("/settings")
+async def get_public_settings():
+    s = await get_app_settings()
+    # Return only customer-safe fields
+    return {
+        "first_order_discount_enabled": s.get("first_order_discount_enabled", False),
+        "first_order_discount_percent": s.get("first_order_discount_percent", 0),
+        "first_order_discount_max": s.get("first_order_discount_max", 0),
+        "subscription_first_amount": s.get("subscription_first_amount", 1.0),
+        "subscription_pricing_mode": s.get("subscription_pricing_mode", "per_delivery"),
+        "subscription_regular_flat_amount": s.get("subscription_regular_flat_amount", 0.0),
+    }
+
+
+@api.get("/admin/settings")
+async def admin_get_settings(user=Depends(strict_admin)):
+    return await get_app_settings()
+
+
+class SettingsIn(BaseModel):
+    subscription_first_amount: Optional[float] = None
+    subscription_pricing_mode: Optional[str] = None
+    subscription_regular_flat_amount: Optional[float] = None
+    first_order_discount_enabled: Optional[bool] = None
+    first_order_discount_percent: Optional[int] = None
+    first_order_discount_max: Optional[int] = None
+    min_order_for_first_discount: Optional[int] = None
+
+
+@api.put("/admin/settings")
+async def admin_update_settings(body: SettingsIn, user=Depends(strict_admin)):
+    upd = {k: v for k, v in body.model_dump().items() if v is not None}
+    if upd.get("subscription_pricing_mode") and upd["subscription_pricing_mode"] not in ("per_delivery", "flat"):
+        raise HTTPException(400, "invalid subscription_pricing_mode")
+    upd["updated_at"] = iso(now_utc())
+    await db.app_settings.update_one({"key": SETTINGS_KEY}, {"$set": upd}, upsert=True)
+    return await get_app_settings()
+
+
+# Payment gateway config exposed to the client (publishable info only)
+@api.get("/payments/config")
+async def payments_config():
+    return {
+        "razorpay_live": RAZORPAY_LIVE,
+        "razorpay_key_id": RAZORPAY_KEY_ID if RAZORPAY_LIVE else None,
+        "currency": "INR",
+    }
 
 
 @api.post("/admin/agents")

@@ -15,9 +15,10 @@ import {
   AITab,
   TicketsTab,
   NotifyTab,
+  SettingsTab,
 } from "@/src/components/management";
 
-const TABS = ["Products", "Inventory", "Coupons", "Managers", "Agents", "Notify", "Referrals", "AI", "Tickets"];
+const TABS = ["Products", "Inventory", "Coupons", "Managers", "Agents", "Notify", "Settings", "Referrals", "AI", "Tickets"];
 
 export default function AdminMore() {
   const insets = useSafeAreaInsets();
@@ -37,6 +38,7 @@ export default function AdminMore() {
         {tab === "Managers" && <ManagersTab />}
         {tab === "Agents" && <AgentsTab />}
         {tab === "Notify" && <NotifyTab />}
+        {tab === "Settings" && <SettingsTab />}
         {tab === "Referrals" && <ReferralsTab />}
         {tab === "AI" && <AITab />}
         {tab === "Tickets" && <TicketsTab />}

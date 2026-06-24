@@ -61,7 +61,7 @@ export default function Subscription() {
       <Pressable testID="autopay-banner" onPress={() => router.push("/autopay")} style={styles.autopay}>
         <Wallet size={24} color={colors.onBrandPrimary} weight="fill" />
         <View style={{ flex: 1 }}>
-          <Txt weight="semibold" color={colors.onBrandPrimary}>UPI AutoPay {autopay?.mandate ? "Active" : "Not set up"}</Txt>
+          <Txt weight="semibold" color={colors.onBrandPrimary}>AutoPay {autopay?.mandate ? "Active" : "Not set up"}</Txt>
           <Txt size={type.sm} color={colors.brandSecondary}>Est. monthly ₹{autopay?.estimated_monthly || 0}</Txt>
         </View>
         <Txt weight="semibold" color={colors.onBrandPrimary}>{autopay?.mandate ? "Manage →" : "Setup →"}</Txt>

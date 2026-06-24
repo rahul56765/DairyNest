@@ -23,11 +23,13 @@ export default function MilkConfig() {
   const toast = useToast();
   const { productId, subId } = useLocalSearchParams<{ productId: string; subId?: string }>();
   const [product, setProduct] = useState<any>(null);
+  const [mode, setMode] = useState<"subscribe" | "buy_once">("subscribe");
   const [qtyLabel, setQtyLabel] = useState("500 ml");
   const [qtyMl, setQtyMl] = useState(500);
   const [custom, setCustom] = useState("");
   const [schedule, setSchedule] = useState("morning");
   const [frequency, setFrequency] = useState("daily");
+  const [oneTimeQty, setOneTimeQty] = useState(1);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -37,8 +39,19 @@ export default function MilkConfig() {
   const milkType = product?.milk_type || "Cow Milk";
   const effectiveMl = custom ? parseInt(custom) || 0 : qtyMl;
   const perDelivery = (PRICE[milkType] || 0.06) * effectiveMl * (schedule === "both" ? 2 : 1);
+  const oneTimeTotal = (product?.price || 0) * oneTimeQty;
 
   const save = async () => {
+    if (mode === "buy_once") {
+      if (oneTimeQty < 1) return toast.show("Choose a quantity", "error");
+      setSaving(true);
+      try {
+        await api.post("/cart/add", { product_id: productId, qty: oneTimeQty });
+        toast.show(`Added ${oneTimeQty} × ${product?.name} to cart`, "success");
+        router.replace("/cart" as any);
+      } catch (e: any) { toast.show(e.message, "error"); } finally { setSaving(false); }
+      return;
+    }
     if (effectiveMl <= 0) return toast.show("Choose a valid quantity", "error");
     setSaving(true);
     try {
@@ -74,6 +87,16 @@ export default function MilkConfig() {
           </View>
         </View>
 
+        <View style={{ paddingHorizontal: spacing.lg, marginTop: spacing.xl }}>
+          <Segmented
+            options={[{ label: "Subscribe daily", value: "subscribe" }, { label: "Buy once", value: "buy_once" }]}
+            value={mode}
+            onChange={(v) => setMode(v as any)}
+            testIDPrefix="mode"
+          />
+        </View>
+
+        {mode === "subscribe" ? (<>
         <Section title="Quantity">
           <Row style={{ gap: spacing.sm, flexWrap: "wrap" }}>
             {QTY.map((q) => (
@@ -111,14 +134,34 @@ export default function MilkConfig() {
             testIDPrefix="frequency"
           />
         </Section>
+        </>) : (
+          <Section title="How many today?">
+            <Row style={{ gap: spacing.sm }}>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <Chip key={n} testID={`one-qty-${n}`} label={`${n}`} active={oneTimeQty === n} onPress={() => setOneTimeQty(n)} />
+              ))}
+            </Row>
+            <Txt color={colors.muted} size={type.sm} style={{ marginTop: spacing.md }}>
+              One-time delivery — pay at checkout, no subscription created.
+            </Txt>
+          </Section>
+        )}
       </ScrollView>
 
       <BlurView intensity={Platform.OS === "ios" ? 40 : 0} tint="light" style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}>
         <View style={{ flex: 1 }}>
-          <Txt color={colors.muted} size={type.sm}>Per delivery</Txt>
-          <Txt display weight="semibold" size={type.xl} color={colors.brandPrimary}>₹{perDelivery.toFixed(2)}</Txt>
+          <Txt color={colors.muted} size={type.sm}>{mode === "subscribe" ? "Per delivery" : "Total"}</Txt>
+          <Txt display weight="semibold" size={type.xl} color={colors.brandPrimary}>
+            ₹{(mode === "subscribe" ? perDelivery : oneTimeTotal).toFixed(2)}
+          </Txt>
         </View>
-        <Button title="Set up UPI AutoPay" onPress={save} loading={saving} testID="save-subscription-button" style={{ flex: 1.4 }} />
+        <Button
+          title={mode === "subscribe" ? "Set up AutoPay" : "Add to Cart"}
+          onPress={save}
+          loading={saving}
+          testID="save-subscription-button"
+          style={{ flex: 1.4 }}
+        />
       </BlurView>
     </View>
   );
