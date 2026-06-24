@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone, timedelta, date
 
+import httpx
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -58,6 +59,79 @@ def clean(doc):
         return doc
     doc.pop("_id", None)
     return doc
+
+
+# ------------------- Push Notifications -------------------
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
+
+async def send_expo_push(tokens: List[str], title: str, body: str, data: Optional[Dict[str, Any]] = None):
+    """Send a push notification to one or more Expo push tokens via Expo Push API."""
+    tokens = [t for t in (tokens or []) if t and t.startswith("ExponentPushToken")]
+    if not tokens:
+        return {"sent": 0, "skipped": True}
+    messages = [
+        {
+            "to": t,
+            "sound": "default",
+            "title": title,
+            "body": body,
+            "data": data or {},
+            "priority": "high",
+            "channelId": "default",
+            "vibrate": [0, 250, 250, 250],
+        }
+        for t in tokens
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as cx:
+            r = await cx.post(EXPO_PUSH_URL, json=messages, headers={"Accept": "application/json", "Content-Type": "application/json"})
+            logger.info(f"Expo push -> {len(tokens)} tokens, status={r.status_code}")
+            return {"sent": len(tokens), "response": r.status_code}
+    except Exception as e:
+        logger.error(f"Expo push error: {e}")
+        return {"sent": 0, "error": str(e)}
+
+
+async def notify_user(user_id: str, title: str, body: str, data: Optional[Dict[str, Any]] = None, log: bool = True):
+    """Look up user's push tokens and send notification + persist to history."""
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        return {"sent": 0, "missing_user": True}
+    tokens = user.get("push_tokens", []) or []
+    result = await send_expo_push(tokens, title, body, data)
+    if log:
+        await db.notifications.insert_one({
+            "id": new_id(), "user_id": user_id, "title": title, "body": body,
+            "data": data or {}, "created_at": iso(now_utc()), "read": False,
+        })
+    return result
+
+
+async def notify_role(role: str, title: str, body: str, data: Optional[Dict[str, Any]] = None):
+    """Broadcast to every user with the given role (or 'all')."""
+    q = {} if role == "all" else {"role": role}
+    cursor = db.users.find(q, {"id": 1, "push_tokens": 1})
+    all_tokens = []
+    user_ids = []
+    async for u in cursor:
+        user_ids.append(u["id"])
+        all_tokens.extend(u.get("push_tokens", []) or [])
+    # Send to all tokens at once (Expo accepts up to 100 per batch)
+    sent_total = 0
+    for i in range(0, len(all_tokens), 100):
+        batch = all_tokens[i:i + 100]
+        res = await send_expo_push(batch, title, body, data)
+        sent_total += res.get("sent", 0)
+    # Persist a notification record for each user
+    if user_ids:
+        await db.notifications.insert_many([
+            {"id": new_id(), "user_id": uid, "title": title, "body": body,
+             "data": data or {}, "created_at": iso(now_utc()), "read": False}
+            for uid in user_ids
+        ])
+    return {"sent": sent_total, "recipients": len(user_ids)}
+
 
 
 # ------------------------- Auth helpers -------------------------
@@ -689,6 +763,10 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
     await db.orders.insert_one(order)
     # clear cart
     await db.carts.update_one({"user_id": user["id"]}, {"$set": {"items": [], "coupon": None}})
+    # Notify customer their order was placed
+    await notify_user(user["id"], "Order Placed 🛒",
+                      f"Order #{oid[:8].upper()} received — total ₹{summary['total']}",
+                      {"kind": "order", "order_id": oid, "status": "received"})
     return {"order": clean(order), "razorpay_key_id": RAZORPAY_KEY_ID if RAZORPAY_LIVE else None,
             "simulated": not RAZORPAY_LIVE}
 
@@ -704,6 +782,10 @@ async def confirm_payment(oid: str, user=Depends(get_current_user)):
     if user.get("referred_by_code"):
         await db.referrals.update_one({"code": user["referred_by_code"]},
                                       {"$inc": {"paid_orders": 1, "reward_amount": 50}})
+    # Notify customer payment confirmed
+    await notify_user(user["id"], "Payment Confirmed 💳",
+                      f"Payment received for order #{oid[:8].upper()}. We're packing your items.",
+                      {"kind": "order", "order_id": oid, "status": "packed"})
     return clean(await db.orders.find_one({"id": oid}))
 
 
@@ -870,6 +952,16 @@ async def agent_delivery_status(oid: str, body: DeliveryStatusIn, user=Depends(r
            "delivery_proof": {"photo": body.photo, "otp": body.otp, "note": body.note,
                               "result": body.status, "at": iso(now_utc())}}
     await db.orders.update_one({"id": oid}, {"$set": upd})
+    # Push notification to customer
+    if order.get("user_id"):
+        if new_status == "delivered":
+            await notify_user(order["user_id"], "Order Delivered ✅",
+                              "Your fresh order has been delivered. Enjoy!",
+                              {"kind": "order", "order_id": oid, "status": "delivered"})
+        elif new_status == "failed":
+            await notify_user(order["user_id"], "Delivery Attempt Failed",
+                              f"Reason: {body.status.replace('_', ' ')}. We'll retry shortly.",
+                              {"kind": "order", "order_id": oid, "status": "failed"})
     return clean(await db.orders.find_one({"id": oid}))
 
 
@@ -997,14 +1089,34 @@ async def admin_order_status(oid: str, body: DeliveryStatusIn, user=Depends(admi
     if s in ["received", "packed", "out_for_delivery", "delivered"]:
         upd["tracking"] = build_tracking(s)
     await db.orders.update_one({"id": oid}, {"$set": upd})
-    return clean(await db.orders.find_one({"id": oid}))
+    order = await db.orders.find_one({"id": oid})
+    if order and order.get("user_id"):
+        status_msgs = {
+            "received": ("Order Received", "We've received your order and will start packing soon."),
+            "packed": ("Order Packed", "Your fresh items are packed and ready for dispatch."),
+            "out_for_delivery": ("Out for Delivery", "Your order is on the way! Track it in the app."),
+            "delivered": ("Order Delivered", "Enjoy your fresh delivery! Tap to rate."),
+            "failed": ("Delivery Failed", "We couldn't complete the delivery — we'll try again."),
+        }
+        title, body_txt = status_msgs.get(s, ("Order Update", f"Status: {s}"))
+        await notify_user(order["user_id"], title, body_txt, {"kind": "order", "order_id": oid, "status": s})
+    return clean(order)
 
 
 @api.put("/admin/orders/{oid}/assign")
 async def admin_assign_order(oid: str, agent_id: str, user=Depends(admin_or_manager())):
     await db.orders.update_one({"id": oid}, {"$set": {"agent_id": agent_id, "status": "out_for_delivery",
                                                       "tracking": build_tracking("out_for_delivery")}})
-    return clean(await db.orders.find_one({"id": oid}))
+    order = await db.orders.find_one({"id": oid})
+    if order:
+        # Notify customer
+        if order.get("user_id"):
+            await notify_user(order["user_id"], "Out for Delivery",
+                              "Your order is on its way!", {"kind": "order", "order_id": oid})
+        # Notify agent of new assignment
+        await notify_user(agent_id, "New Delivery Assigned",
+                          f"A new order is on your route.", {"kind": "assignment", "order_id": oid})
+    return clean(order)
 
 
 @api.get("/admin/agents")
@@ -1112,6 +1224,65 @@ class AgentIn(BaseModel):
     name: str
     phone: str
     employee_id: Optional[str] = ""
+
+
+class PushRegister(BaseModel):
+    token: str
+    platform: Optional[str] = "android"
+
+
+@api.post("/push/register")
+async def push_register(body: PushRegister, user=Depends(get_current_user)):
+    if not body.token or not body.token.startswith("ExponentPushToken"):
+        return {"status": "skipped", "reason": "invalid_token_format"}
+    await db.users.update_one({"id": user["id"]}, {"$addToSet": {"push_tokens": body.token}})
+    return {"status": "registered"}
+
+
+@api.post("/push/unregister")
+async def push_unregister(body: PushRegister, user=Depends(get_current_user)):
+    await db.users.update_one({"id": user["id"]}, {"$pull": {"push_tokens": body.token}})
+    return {"status": "unregistered"}
+
+
+@api.get("/notifications")
+async def list_notifications(user=Depends(get_current_user)):
+    items = await db.notifications.find({"user_id": user["id"]}).sort("created_at", -1).to_list(100)
+    return [clean(n) for n in items]
+
+
+@api.put("/notifications/{nid}/read")
+async def mark_notification_read(nid: str, user=Depends(get_current_user)):
+    await db.notifications.update_one({"id": nid, "user_id": user["id"]}, {"$set": {"read": True}})
+    return {"status": "ok"}
+
+
+@api.put("/notifications/read-all")
+async def mark_all_notifications_read(user=Depends(get_current_user)):
+    await db.notifications.update_many({"user_id": user["id"], "read": False}, {"$set": {"read": True}})
+    return {"status": "ok"}
+
+
+class BroadcastIn(BaseModel):
+    title: str
+    body: str
+    target: str = "all"  # all | customer | agent | manager | admin
+    user_ids: Optional[List[str]] = None
+
+
+@api.post("/admin/push/broadcast")
+async def admin_push_broadcast(body: BroadcastIn, user=Depends(admin_or_manager("marketing"))):
+    if body.user_ids:
+        # Targeted send
+        results = {"sent": 0, "recipients": 0}
+        for uid in body.user_ids:
+            r = await notify_user(uid, body.title, body.body, {"kind": "broadcast"})
+            results["sent"] += r.get("sent", 0)
+            results["recipients"] += 1
+        return results
+    if body.target not in {"all", "customer", "agent", "manager", "admin"}:
+        raise HTTPException(400, "invalid target")
+    return await notify_role(body.target, body.title, body.body, {"kind": "broadcast"})
 
 
 @api.post("/admin/agents")

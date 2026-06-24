@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { View, ScrollView } from "react-native";
+import { View, ScrollView, Pressable, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { colors, spacing, type } from "@/src/theme";
+import { SignOut } from "phosphor-react-native";
+import { useAuth } from "@/src/auth";
+import { colors, spacing, radius, type } from "@/src/theme";
 import { Txt, ChipRow } from "@/src/components/ui";
 import {
   ProductsTab,
@@ -12,12 +14,14 @@ import {
   ReferralsTab,
   AITab,
   TicketsTab,
+  NotifyTab,
 } from "@/src/components/management";
 
-const TABS = ["Products", "Inventory", "Coupons", "Managers", "Agents", "Referrals", "AI", "Tickets"];
+const TABS = ["Products", "Inventory", "Coupons", "Managers", "Agents", "Notify", "Referrals", "AI", "Tickets"];
 
 export default function AdminMore() {
   const insets = useSafeAreaInsets();
+  const { signOut, user } = useAuth();
   const [tab, setTab] = useState("Products");
 
   return (
@@ -32,10 +36,26 @@ export default function AdminMore() {
         {tab === "Coupons" && <CouponsTab />}
         {tab === "Managers" && <ManagersTab />}
         {tab === "Agents" && <AgentsTab />}
+        {tab === "Notify" && <NotifyTab />}
         {tab === "Referrals" && <ReferralsTab />}
         {tab === "AI" && <AITab />}
         {tab === "Tickets" && <TicketsTab />}
+
+        <View style={styles.account}>
+          <Txt color={colors.muted} size={type.sm}>Signed in as</Txt>
+          <Txt weight="semibold">{user?.name} (Super Admin)</Txt>
+          <Txt color={colors.muted} size={type.sm}>+91 {user?.phone}</Txt>
+        </View>
+        <Pressable testID="admin-more-logout" onPress={signOut} style={styles.logout}>
+          <SignOut size={20} color={colors.error} weight="fill" />
+          <Txt weight="semibold" color={colors.error}>Log Out</Txt>
+        </Pressable>
       </ScrollView>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  account: { marginTop: spacing["2xl"], marginBottom: spacing.md, alignItems: "center", gap: 2 },
+  logout: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, marginTop: spacing.md, height: 52, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.error },
+});

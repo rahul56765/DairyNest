@@ -8,6 +8,76 @@ import { Txt, Card, Loading, Row, Badge, Button, QtyStepper } from "@/src/compon
 
 export const MANAGER_MODULES = ["customers", "orders", "products", "inventory", "marketing", "support", "reports"];
 
+// ---------- Send Push Notification (admin + marketing-perm manager) ----------
+export function NotifyTab() {
+  const toast = useToast();
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [target, setTarget] = useState<"all" | "customer" | "agent" | "manager" | "admin">("customer");
+  const [busy, setBusy] = useState(false);
+  const targets: { k: typeof target; label: string }[] = [
+    { k: "all", label: "All Users" },
+    { k: "customer", label: "Customers" },
+    { k: "agent", label: "Delivery Agents" },
+    { k: "manager", label: "Managers" },
+    { k: "admin", label: "Admins" },
+  ];
+
+  const send = async () => {
+    if (!title.trim() || !body.trim()) return toast.show("Title & message required", "error");
+    setBusy(true);
+    try {
+      const r = await api.post("/admin/push/broadcast", { title: title.trim(), body: body.trim(), target });
+      toast.show(`Sent to ${r.recipients ?? 0} user(s) (${r.sent ?? 0} devices)`, "success");
+      setTitle(""); setBody("");
+    } catch (e: any) { toast.show(e.message, "error"); } finally { setBusy(false); }
+  };
+
+  return (
+    <View>
+      <Card style={{ marginBottom: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
+        <Row style={{ gap: spacing.sm }}>
+          <Sparkle size={18} color={colors.brandPrimary} weight="fill" />
+          <Txt weight="semibold">Push Notification Broadcast</Txt>
+        </Row>
+        <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>
+          Send instant notifications. The phone will vibrate.
+        </Txt>
+      </Card>
+      <FormField label="Title" testID="nf-title" value={title} onChange={setTitle} />
+      <View style={{ marginBottom: spacing.sm }}>
+        <Txt size={type.sm} color={colors.muted} style={{ marginBottom: 4 }}>Message</Txt>
+        <TextInput
+          testID="nf-body"
+          value={body}
+          onChangeText={setBody}
+          multiline
+          placeholder="Your notification content..."
+          placeholderTextColor={colors.muted}
+          style={[styles.input, { height: 100, paddingTop: spacing.sm, textAlignVertical: "top" }]}
+        />
+      </View>
+      <Txt size={type.sm} color={colors.muted} style={{ marginBottom: 4 }}>Send to</Txt>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.md }}>
+        {targets.map((t) => {
+          const on = target === t.k;
+          return (
+            <Pressable
+              key={t.k}
+              onPress={() => setTarget(t.k)}
+              testID={`nf-target-${t.k}`}
+              style={[styles.typePill, { flex: 0, paddingHorizontal: spacing.md }, on && styles.typePillActive]}
+            >
+              <Txt weight="semibold" size={type.sm} color={on ? colors.onBrandPrimary : colors.onSurface}>{t.label}</Txt>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Button title="Send Notification" loading={busy} onPress={send} testID="nf-send" />
+    </View>
+  );
+}
+
 // ---------- Products ----------
 export function ProductsTab() {
   const toast = useToast();

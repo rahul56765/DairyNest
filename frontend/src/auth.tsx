@@ -1,5 +1,7 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
+import { router } from "expo-router";
 import { api, setToken, getToken } from "@/src/api";
+import { storage } from "@/src/utils/storage";
 
 export type User = {
   id: string;
@@ -26,9 +28,12 @@ type AuthCtx = {
 
 const Ctx = createContext<AuthCtx>({} as AuthCtx);
 
+const PUSH_TOKEN_KEY = "dn_push_token";
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const signingOutRef = useRef(false);
 
   const bootstrap = useCallback(async () => {
     try {
@@ -55,8 +60,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
-    await setToken(null);
-    setUser(null);
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    try {
+      // Unregister push token from backend BEFORE clearing JWT
+      try {
+        const pushToken = await storage.getItem<string | null>(PUSH_TOKEN_KEY, null);
+        if (pushToken) {
+          await api.post("/push/unregister", { token: pushToken });
+        }
+      } catch { /* non-fatal */ }
+      await setToken(null);
+      setUser(null);
+      // Hard navigation to login -- prevents "stuck on protected screen" issue
+      try { router.replace("/login" as any); } catch { /* router not ready */ }
+    } finally {
+      signingOutRef.current = false;
+    }
   };
 
   const refresh = async () => {

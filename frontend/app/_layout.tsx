@@ -9,6 +9,7 @@ import { useFonts } from "expo-font";
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider } from "@/src/auth";
 import { ToastProvider } from "@/src/components/toast";
+import { PushNotificationsGate } from "@/src/hooks/use-push-notifications";
 
 LogBox.ignoreAllLogs(true);
 SplashScreen.preventAutoHideAsync();
@@ -38,6 +39,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <ToastProvider>
+            <PushNotificationsGate />
             <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FCFAF8" } }} />
           </ToastProvider>
         </AuthProvider>

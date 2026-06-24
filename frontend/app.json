@@ -20,7 +20,8 @@
         "backgroundColor": "#000"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "VIBRATE", "RECEIVE_BOOT_COMPLETED", "WAKE_LOCK"],
+      "useNextNotificationsApi": true
     },
     "web": {
       "bundler": "metro",
@@ -42,6 +43,14 @@
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#000"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#3A5940",
+          "defaultChannel": "default"
         }
       ]
     ],
