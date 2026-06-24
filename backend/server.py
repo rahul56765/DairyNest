@@ -1164,11 +1164,14 @@ async def seed():
         ])
         logger.info("Seeded coupons")
 
+    # migrate legacy admin phone -> real super admin number
+    await db.users.update_one({"phone": "9000000003", "role": "admin"}, {"$set": {"phone": "6398213389"}})
+
     # demo users
     demos = [
         {"phone": "9000000001", "name": "Neeraj Sharma", "role": "customer"},
         {"phone": "9000000002", "name": "Ramesh Kumar", "role": "agent", "employee_id": "DN-AGENT-01"},
-        {"phone": "9000000003", "name": "Admin Boss", "role": "admin"},
+        {"phone": "6398213389", "name": "Admin Boss", "role": "admin"},
     ]
     for d in demos:
         if not await db.users.find_one({"phone": d["phone"]}):

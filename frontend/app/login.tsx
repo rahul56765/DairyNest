@@ -116,7 +116,7 @@ export default function Login() {
                 {[
                   { label: "Customer", p: "9000000001" },
                   { label: "Agent", p: "9000000002" },
-                  { label: "Admin", p: "9000000003" },
+                  { label: "Admin", p: "6398213389" },
                 ].map((d) => (
                   <Pressable key={d.p} testID={`demo-${d.label.toLowerCase()}`} onPress={() => quickFill(d.p)} style={styles.demoChip}>
                     <Txt weight="medium" size={type.sm} color={colors.brandPrimary}>

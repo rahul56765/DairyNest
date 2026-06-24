@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { View, StyleSheet, TextInput, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
+import { View, StyleSheet, TextInput, ScrollView, KeyboardAvoidingView, Platform, Pressable, Linking } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
+import * as Location from "expo-location";
+import { Crosshair } from "phosphor-react-native";
 import { api } from "@/src/api";
 import { useAuth, homeRouteForRole } from "@/src/auth";
 import { useToast } from "@/src/components/toast";
@@ -40,6 +42,8 @@ export default function Register() {
   const { signIn } = useAuth();
   const toast = useToast();
   const [loading, setLoading] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -51,12 +55,51 @@ export default function Register() {
   });
   const set = (k: string) => (v: string) => setForm({ ...form, [k]: v });
 
+  const detectLocation = async () => {
+    setDetecting(true);
+    try {
+      let { status, canAskAgain } = await Location.getForegroundPermissionsAsync();
+      if (status !== "granted") {
+        const req = await Location.requestForegroundPermissionsAsync();
+        status = req.status;
+        canAskAgain = req.canAskAgain;
+      }
+      if (status !== "granted") {
+        if (!canAskAgain) {
+          toast.show("Enable location in Settings to auto-fill", "error");
+          Linking.openSettings();
+        } else {
+          toast.show("Location permission needed", "error");
+        }
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      try {
+        const geo = await Location.reverseGeocodeAsync({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+        if (geo && geo[0]) {
+          const g = geo[0];
+          setForm((f) => ({
+            ...f,
+            apartment: f.apartment || g.name || g.street || "",
+            landmark: f.landmark || [g.district, g.city].filter(Boolean).join(", "),
+          }));
+        }
+      } catch {}
+      toast.show("Location detected & pin saved", "success");
+    } catch {
+      toast.show("Could not get location", "error");
+    } finally {
+      setDetecting(false);
+    }
+  };
+
   const submit = async () => {
     if (!form.name.trim()) return toast.show("Please enter your name", "error");
     if (!form.apartment.trim() || !form.flat.trim()) return toast.show("Apartment & flat are required", "error");
     setLoading(true);
     try {
-      const res = await api.post("/auth/register", { phone, role: "customer", ...form }, false);
+      const res = await api.post("/auth/register", { phone, role: "customer", ...form, lat: coords?.lat ?? null, lng: coords?.lng ?? null }, false);
       await signIn(res.token, res.user);
       toast.show(`Welcome to DairyNest, ${res.user.name.split(" ")[0]}!`, "success");
       router.replace(homeRouteForRole(res.user.role) as any);
@@ -75,6 +118,12 @@ export default function Register() {
           <Txt color={colors.muted} style={{ marginBottom: spacing.lg }}>
             Tell us where to deliver your fresh milk & produce.
           </Txt>
+          <Pressable testID="detect-location-button" onPress={detectLocation} disabled={detecting} style={[styles.locBtn, coords && styles.locBtnDone]}>
+            <Crosshair size={20} color={coords ? colors.success : colors.brandPrimary} weight="fill" />
+            <Txt weight="semibold" color={coords ? colors.success : colors.brandPrimary}>
+              {detecting ? "Detecting…" : coords ? "Location pinned ✓ (tap to update)" : "Detect my location"}
+            </Txt>
+          </Pressable>
           <Field label="Full Name" value={form.name} onChange={set("name")} placeholder="e.g. Neeraj Sharma" testID="reg-name" />
           <Field label="Email" value={form.email} onChange={set("email")} placeholder="you@email.com" keyboardType="email-address" testID="reg-email" optional />
           <Field label="Apartment / Society" value={form.apartment} onChange={set("apartment")} placeholder="e.g. Green Meadows" testID="reg-apartment" />
@@ -99,6 +148,8 @@ export default function Register() {
 
 const styles = StyleSheet.create({
   body: { padding: spacing.xl },
+  locBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, height: 50, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary, marginBottom: spacing.lg },
+  locBtnDone: { borderColor: colors.success, backgroundColor: "#E3F0E8" },
   input: {
     height: 52,
     borderWidth: 1.5,

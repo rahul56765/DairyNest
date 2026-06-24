@@ -23,15 +23,13 @@ export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
-  const [insight, setInsight] = useState<any>(null);
   const [subs, setSubs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [ins, s] = await Promise.all([api.get("/ai/insights"), api.get("/subscriptions")]);
-      setInsight(ins);
+      const s = await api.get("/subscriptions");
       setSubs(s.filter((x: any) => x.status === "active"));
     } catch {}
     setLoading(false);
@@ -116,27 +114,6 @@ export default function Home() {
           </Txt>
         </Card>
       </View>
-
-      {/* AI insight */}
-      {insight && (
-        <Card testID="ai-insight-card" style={styles.aiCard}>
-          <View style={styles.delHead}>
-            <Sparkle size={20} color={colors.brandPrimary} weight="fill" />
-            <Txt display weight="semibold" size={type.lg}>Smart Insight</Txt>
-          </View>
-          <Txt color={colors.onSurfaceTertiary} style={{ marginTop: spacing.sm, lineHeight: 21 }}>{insight.insight}</Txt>
-          <View style={styles.aiStats}>
-            <View style={styles.aiStat}>
-              <Txt display weight="semibold" size={type.xl} color={colors.brandPrimary}>₹{insight.monthly_estimate}</Txt>
-              <Txt size={type.sm} color={colors.muted}>Est. monthly bill</Txt>
-            </View>
-            <View style={styles.aiStat}>
-              <Txt display weight="semibold" size={type.xl} color={colors.brandPrimary}>{insight.recommended_quantity}</Txt>
-              <Txt size={type.sm} color={colors.muted}>Recommended/day</Txt>
-            </View>
-          </View>
-        </Card>
-      )}
     </ScrollView>
   );
 }

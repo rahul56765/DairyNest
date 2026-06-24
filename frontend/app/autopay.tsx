@@ -50,8 +50,8 @@ export default function AutoPay() {
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing["3xl"] }}>
         <Card style={styles.estCard}>
           <Row style={{ gap: spacing.sm }}>
-            <Sparkle size={20} color={colors.brandPrimary} weight="fill" />
-            <Txt weight="semibold" color={colors.onBrandTertiary}>AI Estimated Monthly Bill</Txt>
+            <Wallet size={20} color={colors.brandPrimary} weight="fill" />
+            <Txt weight="semibold" color={colors.onBrandTertiary}>Estimated Monthly Bill</Txt>
           </Row>
           <Txt display weight="semibold" size={type["3xl"]} color={colors.brandPrimary} style={{ marginTop: spacing.sm }}>₹{data.estimated_monthly}</Txt>
           <Txt color={colors.muted} size={type.sm}>{data.active_subscriptions} active subscription(s)</Txt>
