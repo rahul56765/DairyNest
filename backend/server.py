@@ -125,6 +125,7 @@ class Address(BaseModel):
     flat: str = ""
     floor: str = ""
     landmark: str = ""
+    area_name: str = ""  # reverse-geocoded readable area (e.g. "MG Road, Bengaluru")
     lat: Optional[float] = None
     lng: Optional[float] = None
     is_default: bool = True
@@ -1090,6 +1091,51 @@ async def admin_add_coupon(body: CouponIn, user=Depends(admin_or_manager())):
     c["customer_specific"] = False
     await db.coupons.update_one({"code": c["code"]}, {"$set": c}, upsert=True)
     return clean(c)
+
+
+@api.put("/admin/coupons/{code}/toggle")
+async def admin_toggle_coupon(code: str, user=Depends(admin_or_manager())):
+    c = await db.coupons.find_one({"code": code.upper()})
+    if not c:
+        raise HTTPException(404, "Coupon not found")
+    await db.coupons.update_one({"code": code.upper()}, {"$set": {"active": not c.get("active", True)}})
+    return clean(await db.coupons.find_one({"code": code.upper()}))
+
+
+@api.delete("/admin/coupons/{code}")
+async def admin_delete_coupon(code: str, user=Depends(admin_or_manager())):
+    await db.coupons.delete_one({"code": code.upper()})
+    return {"status": "deleted"}
+
+
+class AgentIn(BaseModel):
+    name: str
+    phone: str
+    employee_id: Optional[str] = ""
+
+
+@api.post("/admin/agents")
+async def create_agent(body: AgentIn, user=Depends(strict_admin)):
+    if await db.users.find_one({"phone": body.phone}):
+        raise HTTPException(400, "Phone already registered")
+    uid = new_id()
+    a = {
+        "id": uid, "role": "agent", "name": body.name, "phone": body.phone, "email": "",
+        "addresses": [], "default_address_id": None, "employee_id": body.employee_id or f"DN-AGENT-{random.randint(100, 999)}",
+        "referral_code": gen_ref_code(body.name), "referred_by_code": "", "suspended": False,
+        "created_at": iso(now_utc()), "preferences": {"language": "English", "notifications": True},
+    }
+    await db.users.insert_one(a)
+    return clean(a)
+
+
+@api.put("/admin/agents/{aid}/toggle")
+async def toggle_agent(aid: str, user=Depends(strict_admin)):
+    a = await db.users.find_one({"id": aid, "role": "agent"})
+    if not a:
+        raise HTTPException(404, "Not found")
+    await db.users.update_one({"id": aid}, {"$set": {"suspended": not a.get("suspended", False)}})
+    return clean(await db.users.find_one({"id": aid}))
 
 
 @api.get("/admin/tickets")

@@ -3,7 +3,7 @@ import { api, setToken, getToken } from "@/src/api";
 
 export type User = {
   id: string;
-  role: "customer" | "agent" | "admin";
+  role: "customer" | "agent" | "admin" | "manager";
   name: string;
   phone: string;
   email?: string;
@@ -11,6 +11,8 @@ export type User = {
   default_address_id?: string;
   referral_code?: string;
   employee_id?: string;
+  permissions?: Record<string, boolean>;
+  suspended?: boolean;
   preferences?: any;
 };
 

@@ -10,6 +10,7 @@ import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { colors, spacing, radius, type, shadow } from "@/src/theme";
 import { Txt, Card, Badge, Loading } from "@/src/components/ui";
+import { LocationBanner } from "@/src/components/location-banner";
 
 const QUICK = [
   { key: "milk", label: "Add Milk", Icon: Drop, route: "/(customer)/subscription", bg: "#EAF1E6" },
@@ -62,6 +63,8 @@ export default function Home() {
           <Bell size={22} color={colors.onSurfaceTertiary} />
         </Pressable>
       </View>
+
+      <LocationBanner />
 
       {/* Hero */}
       <Pressable testID="hero-banner" onPress={() => router.push("/(customer)/subscription")} style={styles.hero}>

@@ -1,10 +1,11 @@
 import { useState, useCallback } from "react";
-import { View, StyleSheet, ScrollView, RefreshControl } from "react-native";
+import { View, StyleSheet, ScrollView, RefreshControl, Modal, Pressable, KeyboardAvoidingView, Platform } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { X, UserCircle } from "phosphor-react-native";
 import { api } from "@/src/api";
 import { useToast } from "@/src/components/toast";
-import { colors, spacing, type } from "@/src/theme";
+import { colors, spacing, radius, type } from "@/src/theme";
 import { Txt, Card, Loading, Row, Badge, Button, ChipRow } from "@/src/components/ui";
 
 const FILTERS = ["All", "received", "packed", "out_for_delivery", "delivered"];
@@ -23,6 +24,7 @@ export default function AdminOrders() {
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [pickFor, setPickFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -36,11 +38,12 @@ export default function AdminOrders() {
   }, [filter]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const assign = async (oid: string) => {
-    if (agents.length === 0) return toast.show("No agents available", "error");
+  const doAssign = async (agentId: string, agentName: string) => {
+    if (!pickFor) return;
     try {
-      await api.put(`/admin/orders/${oid}/assign?agent_id=${agents[0].id}`);
-      toast.show(`Assigned to ${agents[0].name}`, "success");
+      await api.put(`/admin/orders/${pickFor}/assign?agent_id=${agentId}`);
+      toast.show(`Assigned to ${agentName}`, "success");
+      setPickFor(null);
       load();
     } catch (e: any) { toast.show(e.message, "error"); }
   };
@@ -65,6 +68,7 @@ export default function AdminOrders() {
         >
           {orders.length === 0 ? <Txt color={colors.muted}>No orders found.</Txt> : orders.map((o) => {
             const sc = SC[o.status] || SC.received;
+            const assignedAgent = agents.find((a) => a.id === o.agent_id);
             return (
               <Card key={o.id} style={{ marginBottom: spacing.md }} testID={`admin-order-${o.id}`}>
                 <Row style={{ justifyContent: "space-between" }}>
@@ -72,9 +76,20 @@ export default function AdminOrders() {
                   <Badge label={o.status.replace(/_/g, " ")} color={sc.c} bg={sc.bg} />
                 </Row>
                 <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>{o.items.length} items · ₹{o.amount} · {o.slot}</Txt>
-                <Txt color={colors.muted} size={type.sm}>{o.address?.apartment} {o.address?.flat} · Agent: {o.agent_id ? "Assigned" : "Unassigned"}</Txt>
+                <Txt color={colors.muted} size={type.sm}>{o.address?.apartment} {o.address?.flat}</Txt>
+                <Row style={{ gap: spacing.sm, marginTop: 4 }}>
+                  <UserCircle size={14} color={colors.muted} />
+                  <Txt color={colors.muted} size={type.sm}>{assignedAgent ? `Agent: ${assignedAgent.name}` : "Unassigned"}</Txt>
+                </Row>
                 <Row style={{ gap: spacing.sm, marginTop: spacing.md }}>
-                  {!o.agent_id && o.status !== "delivered" && <Button title="Assign Agent" onPress={() => assign(o.id)} style={{ flex: 1, height: 40 }} testID={`assign-${o.id}`} />}
+                  {o.status !== "delivered" && (
+                    <Button
+                      title={o.agent_id ? "Reassign" : "Assign Agent"}
+                      onPress={() => setPickFor(o.id)}
+                      style={{ flex: 1, height: 40 }}
+                      testID={`assign-${o.id}`}
+                    />
+                  )}
                   {o.status !== "delivered" && <Button title="Mark Delivered" variant="outline" onPress={() => mark(o.id, "delivered")} style={{ flex: 1, height: 40 }} testID={`mark-delivered-${o.id}`} />}
                 </Row>
               </Card>
@@ -82,8 +97,41 @@ export default function AdminOrders() {
           })}
         </ScrollView>
       )}
+
+      <Modal visible={!!pickFor} transparent animationType="slide" onRequestClose={() => setPickFor(null)}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalWrap}>
+          <View style={styles.modal}>
+            <Row style={{ justifyContent: "space-between", marginBottom: spacing.md }}>
+              <Txt display weight="semibold" size={type.xl}>Pick Delivery Agent</Txt>
+              <Pressable onPress={() => setPickFor(null)} hitSlop={10} testID="picker-close"><X size={22} color={colors.onSurface} /></Pressable>
+            </Row>
+            {agents.length === 0 ? (
+              <Txt color={colors.muted}>No agents available. Create one from Management → Agents.</Txt>
+            ) : (
+              <ScrollView style={{ maxHeight: 400 }}>
+                {agents.filter((a) => !a.suspended).map((a) => (
+                  <Pressable key={a.id} onPress={() => doAssign(a.id, a.name)} style={styles.agentRow} testID={`pick-agent-${a.id}`}>
+                    <View style={styles.avatar}>
+                      <UserCircle size={28} color={colors.brandPrimary} weight="fill" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Txt weight="semibold">{a.name}</Txt>
+                      <Txt color={colors.muted} size={type.sm}>+91 {a.phone} · Delivered: {a.delivered_count ?? 0}</Txt>
+                    </View>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
 
-const styles = StyleSheet.create({});
+const styles = StyleSheet.create({
+  modalWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
+  modal: { backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: spacing.lg, maxHeight: "80%" },
+  agentRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
+});
