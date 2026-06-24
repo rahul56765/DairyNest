@@ -11,6 +11,7 @@ import { useAuth } from "@/src/auth";
 import { colors, spacing, radius, type, shadow } from "@/src/theme";
 import { Txt, Card, Badge, Loading } from "@/src/components/ui";
 import { LocationBanner } from "@/src/components/location-banner";
+import { BrandMark } from "@/src/components/brand";
 
 const QUICK = [
   { key: "milk", label: "Add Milk", Icon: Drop, route: "/(customer)/subscription", bg: "#EAF1E6" },
@@ -53,7 +54,8 @@ export default function Home() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.brandPrimary} />}
     >
       <View style={[styles.head, { paddingTop: insets.top + spacing.md }]}>
-        <View style={{ flex: 1 }}>
+        <BrandMark size={40} />
+        <View style={{ flex: 1, marginLeft: spacing.sm }}>
           <Txt color={colors.muted} size={type.sm}>{greeting},</Txt>
           <Txt display weight="semibold" size={type["2xl"]} numberOfLines={1}>
             {user?.name?.split(" ")[0] || "Friend"}

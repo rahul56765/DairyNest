@@ -7,16 +7,17 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Image,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { LinearGradient } from "expo-linear-gradient";
-import { Drop } from "phosphor-react-native";
 import { api } from "@/src/api";
 import { useAuth, homeRouteForRole } from "@/src/auth";
 import { useToast } from "@/src/components/toast";
 import { colors, spacing, radius, type, font } from "@/src/theme";
 import { Txt, Button } from "@/src/components/ui";
+
+const LOGO = require("@/assets/images/dairynest-logo.png");
 
 export default function Login() {
   const insets = useSafeAreaInsets();
@@ -70,17 +71,9 @@ export default function Login() {
 
   return (
     <View style={styles.container}>
-      <LinearGradient colors={[colors.brandPrimary, colors.brand]} style={[styles.hero, { paddingTop: insets.top + spacing.xl }]}>
-        <View style={styles.logo}>
-          <Drop size={40} color={colors.onBrandPrimary} weight="fill" />
-        </View>
-        <Txt display weight="semibold" size={type["3xl"]} color={colors.onBrandPrimary} style={{ marginTop: spacing.md }}>
-          DairyNest
-        </Txt>
-        <Txt size={type.base} color={colors.brandSecondary} style={{ marginTop: 4 }}>
-          Farm fresh, delivered daily.
-        </Txt>
-      </LinearGradient>
+      <View style={[styles.hero, { paddingTop: insets.top + spacing.md }]}>
+        <Image source={LOGO} style={styles.logo} resizeMode="contain" />
+      </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
@@ -158,8 +151,8 @@ export default function Login() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
-  hero: { paddingBottom: spacing.xl, alignItems: "center", borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
-  logo: { width: 76, height: 76, borderRadius: 24, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
+  hero: { paddingBottom: spacing.lg, alignItems: "center", backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+  logo: { width: 200, height: 200 },
   body: { padding: spacing.xl },
   phoneInput: {
     flexDirection: "row",
