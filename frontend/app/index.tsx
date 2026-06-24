@@ -1,12 +1,13 @@
 import { useEffect } from "react";
-import { View, StyleSheet, ActivityIndicator } from "react-native";
+import { View, StyleSheet, ActivityIndicator, Image, Dimensions } from "react-native";
 import { useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
-import { Drop } from "phosphor-react-native";
+import Animated, { FadeIn } from "react-native-reanimated";
 import { useAuth, homeRouteForRole } from "@/src/auth";
 import { storage } from "@/src/utils/storage";
-import { colors, font, type, spacing } from "@/src/theme";
-import { Txt } from "@/src/components/ui";
+import { colors, spacing } from "@/src/theme";
+
+const POSTER = require("@/assets/images/welcome-poster.png");
+const { width, height } = Dimensions.get("window");
 
 export default function Index() {
   const { user, loading } = useAuth();
@@ -16,38 +17,41 @@ export default function Index() {
     if (loading) return;
     (async () => {
       if (user) {
-        router.replace(homeRouteForRole(user.role) as any);
+        // For signed-in users, transition quickly to their home
+        setTimeout(() => router.replace(homeRouteForRole(user.role) as any), 1100);
         return;
       }
       const seen = await storage.getItem("dn_onboarded", false);
-      setTimeout(() => router.replace(seen ? "/login" : "/onboarding"), 900);
+      setTimeout(() => router.replace(seen ? "/login" : "/onboarding"), 1600);
     })();
   }, [loading, user]);
 
   return (
-    <LinearGradient colors={[colors.brandPrimary, colors.brand]} style={styles.container}>
-      <View style={styles.logo}>
-        <Drop size={48} color={colors.onBrandPrimary} weight="fill" />
+    <View style={styles.container} testID="welcome-transition">
+      <Animated.View entering={FadeIn.duration(450)} style={StyleSheet.absoluteFill}>
+        <Image
+          source={POSTER}
+          style={styles.poster}
+          resizeMode="cover"
+          // hint to the bundler that this is a critical above-the-fold asset
+          fadeDuration={0}
+        />
+      </Animated.View>
+      <View style={styles.indicatorWrap} pointerEvents="none">
+        <ActivityIndicator color={colors.brandPrimary} size="small" />
       </View>
-      <Txt display weight="semibold" size={type["3xl"]} color={colors.onBrandPrimary} style={{ marginTop: spacing.lg }}>
-        DairyNest
-      </Txt>
-      <Txt size={type.lg} color={colors.brandSecondary} style={{ marginTop: spacing.xs }}>
-        Farm fresh, delivered daily.
-      </Txt>
-      <ActivityIndicator color={colors.onBrandPrimary} style={{ marginTop: spacing["2xl"] }} />
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: "center", justifyContent: "center" },
-  logo: {
-    width: 96,
-    height: 96,
-    borderRadius: 28,
-    backgroundColor: "rgba(255,255,255,0.15)",
+  container: { flex: 1, backgroundColor: "#FCFAF8" },
+  poster: { width, height },
+  indicatorWrap: {
+    position: "absolute",
+    bottom: spacing["3xl"],
+    left: 0,
+    right: 0,
     alignItems: "center",
-    justifyContent: "center",
   },
 });
