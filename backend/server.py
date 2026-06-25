@@ -250,6 +250,8 @@ class CheckoutIn(BaseModel):
     slot: str = "morning"
     payment_method: str = "upi"
     address_id: Optional[str] = None
+    source: Optional[str] = "one_time"  # "one_time" | "subscription"
+    subscription_id: Optional[str] = None
 
 
 class CouponValidate(BaseModel):
@@ -784,6 +786,8 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
         "tracking": build_tracking("received"),
         "address": addr,
         "agent_id": None,
+        "source": body.source or "one_time",
+        "subscription_id": body.subscription_id,
         "delivery_date": (date.today() + (timedelta(days=1) if body.slot == "next_day" else timedelta(days=0))).isoformat(),
         "created_at": iso(now_utc()),
     }
@@ -1106,13 +1110,105 @@ async def admin_activate(cid: str, user=Depends(admin_or_manager())):
     return {"status": "active"}
 
 
+async def enrich_orders(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Attach customer info + subscription detection metadata to admin order dicts.
+
+    - Adds `customer` = {id, name, phone, email}
+    - Adds `is_subscription` = True if order.source == 'subscription'
+      OR (heuristic) any milk item in the order matches an active subscription
+      of that customer (same milk_type or same product_id).
+    - Adds `subscription_refs` = list of matching subscription summaries.
+    """
+    if not orders:
+        return orders
+    user_ids = list({o.get("user_id") for o in orders if o.get("user_id")})
+    users = await db.users.find({"id": {"$in": user_ids}}).to_list(len(user_ids) or 1)
+    user_map = {u["id"]: u for u in users}
+    # All active subs for these users (one query)
+    subs = await db.subscriptions.find({
+        "user_id": {"$in": user_ids},
+        "status": {"$in": ["active", "paused"]},
+    }).to_list(1000)
+    subs_by_user: Dict[str, List[Dict[str, Any]]] = {}
+    for s in subs:
+        subs_by_user.setdefault(s["user_id"], []).append(s)
+
+    out: List[Dict[str, Any]] = []
+    for o in orders:
+        u = user_map.get(o.get("user_id")) or {}
+        o["customer"] = {
+            "id": u.get("id"),
+            "name": u.get("name") or "—",
+            "phone": u.get("phone") or "",
+            "email": u.get("email") or "",
+        }
+        # Subscription detection
+        is_sub = (o.get("source") == "subscription") or bool(o.get("subscription_id"))
+        refs: List[Dict[str, Any]] = []
+        user_subs = subs_by_user.get(o.get("user_id"), [])
+        if user_subs:
+            # Build quick lookup of subscription identifiers
+            milk_items = []
+            for it in o.get("items", []):
+                p = it.get("product") or {}
+                if (p.get("type") == "milk"):
+                    milk_items.append(p)
+            for s in user_subs:
+                matched = False
+                if o.get("subscription_id") and s.get("id") == o.get("subscription_id"):
+                    matched = True
+                else:
+                    for mp in milk_items:
+                        if s.get("product_id") and s.get("product_id") == mp.get("id"):
+                            matched = True
+                            break
+                        if s.get("milk_type") and (s.get("milk_type") == mp.get("milk_type")
+                                                   or s.get("milk_type") == mp.get("category")):
+                            matched = True
+                            break
+                if matched:
+                    is_sub = True
+                    refs.append({
+                        "id": s.get("id"),
+                        "milk_type": s.get("milk_type"),
+                        "quantity_label": s.get("quantity_label"),
+                        "schedule": s.get("schedule"),
+                        "frequency": s.get("frequency"),
+                        "status": s.get("status"),
+                        "price_per_delivery": s.get("price_per_delivery"),
+                    })
+        o["is_subscription"] = is_sub
+        o["subscription_refs"] = refs
+        # Resolve agent (lightweight)
+        if o.get("agent_id"):
+            ag = await db.users.find_one({"id": o["agent_id"]})
+            if ag:
+                o["agent"] = {
+                    "id": ag.get("id"),
+                    "name": ag.get("name"),
+                    "phone": ag.get("phone"),
+                    "employee_id": ag.get("employee_id"),
+                }
+        out.append(o)
+    return out
+
+
 @api.get("/admin/orders")
 async def admin_orders(status: Optional[str] = None, user=Depends(admin_or_manager())):
     q = {}
     if status:
         q["status"] = status
     orders = await db.orders.find(q).sort("created_at", -1).to_list(500)
-    return [clean(o) for o in orders]
+    return await enrich_orders([clean(o) for o in orders])
+
+
+@api.get("/admin/orders/{oid}")
+async def admin_order_detail(oid: str, user=Depends(admin_or_manager())):
+    order = await db.orders.find_one({"id": oid})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    enriched = await enrich_orders([clean(order)])
+    return enriched[0]
 
 
 @api.put("/admin/orders/{oid}/status")

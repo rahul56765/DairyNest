@@ -103,19 +103,84 @@
 #====================================================================================================
 
 user_problem_statement: |
-  USER BUG: After a customer places an order, the order automatically jumps to "packed"
-  status. The "Received" tab on the admin order list is therefore always empty.
-
-  Plus feature work:
-  - Home should only show Milk + Fruits/Vegetables sections.
-  - Milk should support BOTH subscription AND single purchase.
-  - Rename "UPI AutoPay" → "AutoPay" everywhere (looks unprofessional otherwise).
-  - Checkout should route to Razorpay gateway (AutoPay or single payment).
-  - Admin should configure subscription AutoPay (e.g. first ₹1 order, regular amount,
-    first-time buyer discount).
+  USER FEATURE: On the admin panel, complete detailed order information should be
+  visible. Subscription orders should be highlighted prominently.
 
 backend:
-  - task: "BUG: Order jumps to packed immediately after payment"
+  - task: "Enriched admin orders endpoint with customer + subscription detection"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added enrich_orders() helper. GET /api/admin/orders now returns each
+          order with:
+            - customer: {id, name, phone, email}
+            - agent: {id, name, phone, employee_id} when assigned
+            - is_subscription: bool — true if order.source == "subscription"
+              OR (heuristic) any milk item in order matches an active subscription
+              of that customer (same product_id OR matching milk_type/category)
+            - subscription_refs: list of matched subscription summaries
+              {id, milk_type, quantity_label, schedule, frequency, status, price_per_delivery}
+
+          Added new endpoint GET /api/admin/orders/{oid} returning the SAME enriched
+          shape for a single order (used by the new admin order detail screen).
+
+          Also extended CheckoutIn to optionally accept `source` and `subscription_id`
+          fields (default source = "one_time"). These get persisted on the order,
+          future-proofing real subscription order generation. Backward compatible.
+
+          Permissions unchanged — admin_or_manager() dependency still gates both endpoints.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL 36 TESTS PASSED - Comprehensive validation complete:
+          
+          SECTION A (Admin Orders List Enrichment) - 9/9 PASSED:
+          - GET /api/admin/orders returns 200 with list of orders
+          - All enrichment fields present: customer, is_subscription, subscription_refs
+          - All pre-existing fields intact (id, items, amount, status, etc.)
+          - Customer object has all required keys (id, name, phone, email)
+          - is_subscription is boolean, subscription_refs is list
+          - Status filtering works (GET /api/admin/orders?status=out_for_delivery)
+          
+          SECTION B (Subscription Detection Heuristic) - 5/5 PASSED:
+          - Created A2 Milk subscription for customer (status: active)
+          - Orders with matching milk items correctly marked is_subscription=true
+          - subscription_refs populated with matching subscription details
+          - Heuristic correctly identifies subscription orders
+          
+          SECTION C (Admin Order Detail Endpoint) - 5/5 PASSED:
+          - GET /api/admin/orders/{oid} returns 200 with single enriched order
+          - Response is object (not list) with all enrichment fields
+          - GET /api/admin/orders/non-existent-id returns 404
+          - GET /api/admin/orders/{oid} as customer returns 403 (permission gating works)
+          
+          SECTION D (Permission Gating) - 1/1 PASSED:
+          - GET /api/admin/orders as customer returns 403
+          
+          SECTION E (Checkout Source & Subscription ID) - 8/8 PASSED:
+          - Checkout with source="subscription" and subscription_id="sub_demo_1" works
+          - Order correctly stores source and subscription_id fields
+          - Order status is "received" (NOT "packed") - previous bug fix intact
+          - Admin view shows is_subscription=true for subscription-sourced orders
+          - Old-style checkout (no source field) defaults to source="one_time"
+          - Backward compatibility maintained
+          
+          SECTION F (Regression Check) - 8/8 PASSED:
+          - Order checkout creates order with status="received"
+          - Payment confirmation keeps status="received" (does NOT auto-jump to "packed")
+          - payment_status correctly changes from "pending" to "paid"
+          - Tracking array correct: received.done=true, packed.done=false
+          - CRITICAL BUG FIX VERIFIED: Orders no longer skip "received" stage
+          
+          All endpoints working correctly with proper enrichment, permission gating,
+          and backward compatibility. Previous bug fix remains intact.
     implemented: true
     working: true
     file: "backend/server.py"
@@ -249,7 +314,55 @@ backend:
           First-order discount logic working correctly with proper eligibility checks.
 
 frontend:
-  - task: "Home: only Milk + Fruits/Vegetables sections"
+  - task: "Admin orders list: rich cards + subscription highlight + tap-to-detail"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/(admin)/orders.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Replaced compact admin order cards with full-detail cards:
+            - SUBSCRIPTION banner on top + green left border + tinted bg when is_subscription
+            - Customer name + phone (tap to call)
+            - Items block (first 3 + "+N more")
+            - Bill summary (subtotal / discount / delivery / total)
+            - Payment method + payment_status badge + slot
+            - Full address (flat + apartment + area + city)
+            - Agent name + phone or "Unassigned"
+            - Tap card → /admin-order/[id]
+            - Existing Assign / Mark Delivered actions retained
+          Manager screen reuses this file via re-export so manager benefits too.
+
+  - task: "New admin order detail screen with everything"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/admin-order/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New screen at /admin-order/[id] showing:
+            - Top SUBSCRIPTION banner when is_subscription
+            - Full status timeline with current status badge + placed-at timestamp
+            - Customer card (avatar, name, phone, email) + Call + WhatsApp buttons
+            - "Linked Subscriptions" card listing each subscription_refs entry
+              (milk_type, qty, schedule, frequency, status, price/delivery)
+            - Items card with thumbnail image, name, weight, qty × price, line total
+            - Bill details (subtotal, discount, first_order_bonus sub-line, delivery, total)
+            - Payment card (method, status badge, razorpay ref)
+            - Delivery card (slot, delivery_date, full address, landmark)
+            - Agent card (avatar, name, phone, employee_id, call button, Reassign)
+            - Change Status card with 4 status options + CURRENT badge
+            - Footer meta (order id, source)
+
+frontend_old:
     implemented: true
     working: "NA"
     file: "frontend/app/(customer)/home.tsx"
@@ -346,11 +459,12 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.4"
-  test_sequence: 4
+  test_sequence: 5
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Enriched admin orders endpoint with customer + subscription detection"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -358,83 +472,123 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      PRIMARY: verify the bug fix for "order goes straight to packed".
+      Implemented detailed admin order visibility + subscription highlight.
 
       Use OTP "123456" for all logins. Demo accounts:
         - Customer 9000000001
         - Admin    6398213389
 
-      BUG FIX VERIFICATION (highest priority):
-        1. Login as customer 9000000001.
-        2. POST /api/cart/add {"product_id":"<any-from-/api/products>","qty":1}
-        3. POST /api/orders/checkout {"address_id":"<addr>","slot":"morning","payment_method":"upi"}
-           → expect 200, order.status == "received", order.payment_status == "pending"
-        4. POST /api/orders/{order_id}/confirm-payment
-           → CRITICAL: expect order.status == "received" (NOT "packed"!),
-             payment_status == "paid", tracking[0].done==true and tracking[1].done==false
-        5. GET /api/orders/{order_id} → still status="received"
-        6. Login as admin 6398213389. GET /api/admin/orders?status=received
-           → the new order MUST appear in the list (regression of empty Received tab).
-        7. PUT /api/admin/orders/{order_id}/status {"status":"packed"}
-           → only now should status become "packed"
-        8. GET /api/admin/orders?status=packed → order present.
-        9. GET /api/admin/orders?status=received → order NOT present anymore.
+      BACKEND TESTS NEEDED (validate that previous endpoints still return the same
+      shape PLUS the new enrichment fields; AND the new detail endpoint works):
 
-      APP SETTINGS:
-        10. GET /api/settings → 200, has first_order_discount_enabled etc.
-        11. GET /api/admin/settings as customer → 403
-        12. GET /api/admin/settings as admin → 200 with all keys
-        13. PUT /api/admin/settings {"first_order_discount_percent":25, "first_order_discount_max":150} → 200, updated
-        14. PUT /api/admin/settings {"subscription_pricing_mode":"bogus"} → 400
+      A) GET /api/admin/orders (list)  — login as admin 6398213389
+         1. GET /api/admin/orders → 200, response is a list.
+         2. For each order, expect these enrichment fields exist:
+              - customer: dict with keys id, name, phone, email
+              - is_subscription: boolean
+              - subscription_refs: list (may be empty)
+              - agent: optional dict (only when agent_id present) with id, name, phone
+            Also the pre-existing fields (id, items, amount, status, payment_status,
+            address, tracking, slot, created_at, delivery_date, subtotal,
+            delivery_charge, discount) MUST still be present.
+         3. GET /api/admin/orders?status=out_for_delivery → 200, filtered list.
 
-      FIRST-ORDER DISCOUNT IN CHECKOUT:
-        15. Create a NEW customer (any unused phone) — they should have ZERO orders.
-            (use POST /api/auth/send-otp + verify-otp with code "123456"; this should create the user if new)
-        16. Add product, then POST /api/orders/checkout. Response should include
-            `first_order_bonus > 0` and the order.amount should be (cart.total - bonus).
-        17. Repeat checkout with same customer (after marking the first as paid) →
-            `first_order_bonus == 0` (no double discount).
-        18. PUT /api/admin/settings {"first_order_discount_enabled": false} → repeat checkout for
-            a different new customer → `first_order_bonus == 0` (disabled).
+      B) Subscription detection (heuristic)
+         4. As customer 9000000001 POST /api/subscriptions with milk_type "A2 Milk"
+            (use any quantity_label "1L", quantity_ml 1000, schedule "morning",
+            frequency "daily", product_id "x"). 200, status "active".
+         5. As admin GET /api/admin/orders → in the list, ANY order whose items
+            contain "A2 Desi Cow Milk" must have is_subscription == true AND
+            len(subscription_refs) >= 1 AND refs[0].milk_type == "A2 Milk".
+         6. Orders that have NO milk items matching this user's subs should keep
+            is_subscription == false.
 
-      MULTI-TYPE FILTER:
-        19. GET /api/products?type=fruit,vegetable → returns products whose type is fruit OR vegetable
-        20. GET /api/products/categories?type=fruit,vegetable → returns union of categories
-        21. GET /api/products?type=milk → still works (single type, backward compat)
+      C) GET /api/admin/orders/{oid} (NEW detail endpoint)
+         7. GET /api/admin/orders/<any-existing-order-id> → 200, single object,
+            same enrichment shape as list items.
+         8. GET /api/admin/orders/non-existent-id → 404.
+         9. GET /api/admin/orders/<any-id> as customer 9000000001 → 403.
 
-      PAYMENTS CONFIG:
-        22. GET /api/payments/config → {razorpay_live: false, razorpay_key_id: null, currency: "INR"} (no keys configured in dev)
+      D) Permission gating
+         10. GET /api/admin/orders as a non-admin customer → 403.
 
-      Report PASS/FAIL for each step with HTTP status & response excerpt.
+      E) Checkout source/subscription_id (new optional fields)
+         11. As customer 9000000001, POST /api/cart/add then POST /api/orders/checkout
+             with body {"address_id":"<any>","slot":"morning","payment_method":"upi",
+             "source":"subscription","subscription_id":"sub_demo_1"}
+             → 200. The created order in /api/orders/{oid} should have
+             source=="subscription" and subscription_id=="sub_demo_1" and
+             status=="received" (NOT packed — earlier bug should still be fixed).
+         12. As admin, GET /api/admin/orders/{that-order-id} → is_subscription
+             must be true (because source=="subscription"), even if no matching
+             milk subscription exists.
+         13. Old-style checkout with no source field should still default
+             source=="one_time" and is_subscription should depend purely on milk
+             subscription matching (no false positives).
+
+      F) Regression check
+         14. Existing flow from previous test pass should still work — confirm
+             POST /api/orders/checkout still returns status="received" and the
+             previous bug-fix tests pass (orders DON'T jump to "packed" on
+             confirm-payment).
+
+      Report PASS/FAIL for each step.
+  - agent: "main"
+    message: |
+      Earlier completed tasks (kept here for context):
+
+      ## Previous bug fix: "Order goes straight to packed"
+      Status: FIXED & verified by testing agent (29/29 tests passing).
+      - POST /api/orders/{oid}/confirm-payment no longer sets status="packed".
+      - Order stays at "received" until admin moves it via /api/admin/orders/{oid}/status.
+      - Confirmation copy updated.
+
+      ## Multi-type product filter
+      - GET /api/products and /api/products/categories now accept comma-separated
+        type values (e.g. ?type=fruit,vegetable). Backward compatible.
+
+      ## App settings
+      - app_settings singleton (subscription AutoPay + first-order discount).
+      - GET /api/settings (public subset), GET/PUT /api/admin/settings (strict_admin),
+        GET /api/payments/config.
+
+      ## First-order discount in checkout
+      - Auto-applied to brand-new customers when enabled, gated on prior_paid==0.
+        Sets order.first_order_bonus and reduces amount accordingly.
   - agent: "testing"
     message: |
-      ✅ ALL BACKEND TESTS PASSED (29/29)
+      ✅ BACKEND TESTING COMPLETE - ALL 36 TESTS PASSED
       
-      Comprehensive testing completed for all 4 backend tasks:
+      Tested all 6 sections (A-F) as requested:
       
-      A) BUG FIX - Order status flow (9 tests) ✅
-         - Orders stay in "received" after payment confirmation
-         - Admin "Received" tab now shows orders correctly
-         - Manual status transition to "packed" works
+      ✅ Section A (9 tests): Admin orders list enrichment verified
+         - All enrichment fields present and correctly structured
+         - Pre-existing fields intact
+         - Status filtering works
       
-      B) App settings endpoints (6 tests) ✅
-         - Public GET /api/settings works
-         - Admin GET/PUT /api/admin/settings with proper permission gating
-         - Settings validation and persistence working
-         - GET /api/payments/config returns correct values
+      ✅ Section B (5 tests): Subscription detection heuristic working
+         - Created A2 Milk subscription successfully
+         - Orders with matching milk items correctly marked as subscription
+         - subscription_refs populated with correct data
       
-      C) First-order discount (9 tests) ✅
-         - New customers get discount automatically
-         - Repeat orders don't get discount
-         - Discount can be disabled via settings
-         - Discount calculation correct (20% up to ₹100)
+      ✅ Section C (5 tests): New admin order detail endpoint working
+         - GET /api/admin/orders/{oid} returns enriched single order
+         - 404 for non-existent orders
+         - 403 for non-admin access
       
-      D) Multi-type product filter (3 tests) ✅
-         - Comma-separated types work (fruit,vegetable)
-         - Categories endpoint supports multi-type
-         - Backward compatible with single type
+      ✅ Section D (1 test): Permission gating working
+         - Non-admin customers correctly blocked from admin endpoints
       
-      E) Payments config (1 test) ✅
-         - Returns razorpay_live, razorpay_key_id, currency
+      ✅ Section E (8 tests): Checkout source/subscription_id fields working
+         - New optional fields accepted and persisted
+         - is_subscription correctly set based on source field
+         - Backward compatibility maintained (defaults to "one_time")
+         - Previous bug fix intact (status stays "received")
       
-      All backend APIs are working correctly. No issues found.
+      ✅ Section F (8 tests): Regression tests all passing
+         - Order checkout → status="received"
+         - Confirm payment → status STAYS "received" (NOT "packed")
+         - Tracking array correct
+         - CRITICAL BUG FIX VERIFIED
+      
+      No issues found. All endpoints working as expected.
