@@ -107,6 +107,30 @@ user_problem_statement: |
   visible. Subscription orders should be highlighted prominently.
 
 backend:
+  - task: "Agent route enriched with customer info (name + phone)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          GET /api/agent/route now embeds `customer: {name, phone}` on each
+          delivery stop so the agent's app can:
+            - Dial the customer directly (tel: with +91 prefix)
+            - Open Google Maps with the address (lat/lng if available, else a
+              search query built from flat + apartment + landmark + area + city + pincode)
+          One extra Mongo find query per route load (batched by user_id $in).
+      - working: true
+        agent: "main"
+        comment: |
+          Verified via curl as agent 9000000002: each stop now has
+          `customer.name = "Neeraj Sharma"` and `customer.phone = "9000000001"`.
+          No regression — existing stops/apartment grouping unchanged.
+
   - task: "Enriched admin orders endpoint with customer + subscription detection"
     implemented: true
     working: true

@@ -967,12 +967,22 @@ async def agent_summary(user=Depends(require_role("agent"))):
 async def agent_route(user=Depends(require_role("agent"))):
     today = date.today().isoformat()
     orders = await db.orders.find({"agent_id": user["id"], "delivery_date": today}).to_list(500)
+    # Enrich each order with customer {name, phone} so the agent can call/locate
+    user_ids = list({o.get("user_id") for o in orders if o.get("user_id")})
+    customers: Dict[str, Dict[str, Any]] = {}
+    if user_ids:
+        cust_docs = await db.users.find({"id": {"$in": user_ids}}).to_list(len(user_ids))
+        for c in cust_docs:
+            customers[c["id"]] = {"name": c.get("name") or "—", "phone": c.get("phone") or ""}
     # group by apartment
     groups: Dict[str, Any] = {}
     for o in orders:
         addr = o.get("address") or {}
         apt = addr.get("apartment") or "Unassigned"
-        groups.setdefault(apt, []).append(clean(o))
+        o = clean(o)
+        cust = customers.get(o.get("user_id")) or {"name": "—", "phone": ""}
+        o["customer"] = cust
+        groups.setdefault(apt, []).append(o)
     return [{"apartment": k, "stops": v} for k, v in groups.items()]
 
 
