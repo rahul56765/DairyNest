@@ -7,7 +7,7 @@ import json
 from datetime import date, timedelta
 
 # Configuration
-BASE_URL = "https://e5ecde86-5f60-48ec-820c-bc6d1a2312a5.preview.emergentagent.com/api"
+BASE_URL = "https://readme-guide-9.preview.emergentagent.com/api"
 OTP = "123456"
 CUSTOMER_PHONE = "9000000001"
 ADMIN_PHONE = "6398213389"
