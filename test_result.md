@@ -463,8 +463,7 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Enriched admin orders endpoint with customer + subscription detection"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -472,7 +471,33 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Implemented detailed admin order visibility + subscription highlight.
+      ADDITIONAL FRONTEND-ONLY CHANGES (no backend re-test needed):
+
+      1) Admin orders list now shows correct CTAs per status:
+         - status="received" → "Mark Packed" button (NEW). Tapping calls
+           PUT /api/admin/orders/{oid}/status {"status":"packed"} — same endpoint
+           the testing agent already verified previously.
+         - status="packed" → button: "Send Out" (if agent assigned, marks
+           out_for_delivery) or "Assign Agent" if not assigned.
+         - status="out_for_delivery" → "Reassign" + "Mark Delivered".
+
+      2) Removed customer-facing "AutoPay" wording across the app:
+         - milk-config CTA: "Set up AutoPay" → "Checkout"
+         - Customer subscription banner: "AutoPay Active/Not set up" → "Recurring Payment Active/Not set up"
+         - Profile menu: "AutoPay" → "Recurring Payments"
+         - Onboarding sub-copy: "AutoPay" → "easy checkout"
+         - Recurring payment screen header: "AutoPay" → "Recurring Payment"
+         - Action buttons: "Pause AutoPay" → "Pause", "Create AutoPay Mandate" → "Confirm & Set Up Recurring Payment"
+         - Toast messages updated likewise
+         - Admin order detail banner: "auto-charged via AutoPay" → "auto-charged at checkout"
+         - Admin dashboard KPI: "Failed AutoPay" → "Failed Recurring"
+         - Admin Settings tab: "Subscription AutoPay" → "Subscription Recurring Payment",
+           "First AutoPay charge" → "First recurring charge"
+         - The /autopay route, /api/autopay/* endpoints, and Razorpay AutoPay
+           mandate logic underneath REMAIN UNCHANGED — only display labels were
+           changed.
+
+      No new backend testing needed.
 
       Use OTP "123456" for all logins. Demo accounts:
         - Customer 9000000001

@@ -26,13 +26,13 @@ export default function AutoPay() {
   }, []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  if (!data) return <View style={{ flex: 1, backgroundColor: colors.surface }}><Header title="AutoPay" back /><Loading /></View>;
+  if (!data) return <View style={{ flex: 1, backgroundColor: colors.surface }}><Header title="Recurring Payment" back /><Loading /></View>;
 
   const setup = async () => {
     setBusy(true);
     try {
       await api.post("/autopay/setup", { max_amount: parseFloat(maxAmount), app });
-      toast.show("AutoPay mandate active!", "success");
+      toast.show("Recurring payment active!", "success");
       load();
     } catch (e: any) { toast.show(e.message, "error"); } finally { setBusy(false); }
   };
@@ -46,7 +46,7 @@ export default function AutoPay() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
-      <Header title="AutoPay" back />
+      <Header title="Recurring Payment" back />
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing["3xl"] }}>
         <Card style={styles.estCard}>
           <Row style={{ gap: spacing.sm }}>
@@ -75,9 +75,9 @@ export default function AutoPay() {
 
             <Row style={{ gap: spacing.md, marginTop: spacing.lg }}>
               {m.status === "active" ? (
-                <Button title="Pause AutoPay" variant="secondary" onPress={() => action("pause", "AutoPay paused")} style={{ flex: 1 }} testID="pause-autopay" />
+                <Button title="Pause" variant="secondary" onPress={() => action("pause", "Recurring payment paused")} style={{ flex: 1 }} testID="pause-autopay" />
               ) : (
-                <Button title="Resume" onPress={() => action("resume", "AutoPay resumed")} style={{ flex: 1 }} testID="resume-autopay" />
+                <Button title="Resume" onPress={() => action("resume", "Recurring payment resumed")} style={{ flex: 1 }} testID="resume-autopay" />
               )}
               <Button title="Cancel" variant="outline" onPress={() => action("cancel", "Mandate cancelled")} style={{ flex: 1 }} testID="cancel-autopay" />
             </Row>
@@ -94,7 +94,7 @@ export default function AutoPay() {
             <Row style={{ gap: spacing.sm, flexWrap: "wrap" }}>
               {APPS.map((a) => <Chip key={a} testID={`upi-app-${a}`} label={a} active={app === a} onPress={() => setApp(a)} />)}
             </Row>
-            <Button title="Create AutoPay Mandate" onPress={setup} loading={busy} testID="setup-autopay-button" style={{ marginTop: spacing.xl }} />
+            <Button title="Confirm & Set Up Recurring Payment" onPress={setup} loading={busy} testID="setup-autopay-button" style={{ marginTop: spacing.xl }} />
           </>
         )}
       </ScrollView>

@@ -211,7 +211,23 @@ export default function AdminOrders() {
 
                 {/* Actions */}
                 <Row style={{ gap: spacing.sm, marginTop: spacing.md }}>
-                  {o.status !== "delivered" && (
+                  {o.status === "received" && (
+                    <Button
+                      title="Mark Packed"
+                      onPress={() => mark(o.id, "packed")}
+                      style={{ flex: 1, height: 40 }}
+                      testID={`mark-packed-${o.id}`}
+                    />
+                  )}
+                  {o.status === "packed" && (
+                    <Button
+                      title={o.agent_id ? "Send Out" : "Assign Agent"}
+                      onPress={() => o.agent_id ? mark(o.id, "out_for_delivery") : setPickFor(o.id)}
+                      style={{ flex: 1, height: 40 }}
+                      testID={`send-out-${o.id}`}
+                    />
+                  )}
+                  {(o.status === "out_for_delivery" || (o.status !== "received" && o.status !== "packed" && o.status !== "delivered")) && (
                     <Button
                       title={o.agent_id ? "Reassign" : "Assign Agent"}
                       onPress={() => setPickFor(o.id)}
@@ -219,7 +235,9 @@ export default function AdminOrders() {
                       testID={`assign-${o.id}`}
                     />
                   )}
-                  {o.status !== "delivered" && <Button title="Mark Delivered" variant="outline" onPress={() => mark(o.id, "delivered")} style={{ flex: 1, height: 40 }} testID={`mark-delivered-${o.id}`} />}
+                  {o.status !== "delivered" && o.status !== "received" && (
+                    <Button title="Mark Delivered" variant="outline" onPress={() => mark(o.id, "delivered")} style={{ flex: 1, height: 40 }} testID={`mark-delivered-${o.id}`} />
+                  )}
                 </Row>
 
                 {/* View details hint */}

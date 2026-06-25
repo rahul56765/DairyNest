@@ -28,7 +28,7 @@ export default function AdminDashboard() {
     { label: "Today's Orders", value: k.today_orders, color: colors.info },
     { label: "Today's Revenue", value: `₹${k.today_revenue}`, color: colors.brand },
     { label: "Pending Pay", value: k.pending_payments, color: colors.warning },
-    { label: "Failed AutoPay", value: k.failed_autopay, color: colors.error },
+    { label: "Failed Recurring", value: k.failed_autopay, color: colors.error },
     { label: "New Referrals", value: k.new_referrals, color: colors.brandPrimary },
     { label: "Conversion", value: `${k.conversion_rate}%`, color: colors.success },
   ];

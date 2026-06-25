@@ -156,7 +156,7 @@ export default function MilkConfig() {
           </Txt>
         </View>
         <Button
-          title={mode === "subscribe" ? "Set up AutoPay" : "Add to Cart"}
+          title={mode === "subscribe" ? "Checkout" : "Add to Cart"}
           onPress={save}
           loading={saving}
           testID="save-subscription-button"

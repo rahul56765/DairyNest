@@ -101,7 +101,7 @@ export default function AdminOrderDetail() {
             <View style={{ flex: 1, marginLeft: spacing.sm }}>
               <Txt color={colors.onBrandPrimary} weight="semibold">Subscription Order</Txt>
               <Txt color={colors.onBrandPrimary} size={type.sm} style={{ opacity: 0.85 }}>
-                Recurring delivery — auto-charged via AutoPay
+                Recurring delivery — auto-charged at checkout
               </Txt>
             </View>
           </View>

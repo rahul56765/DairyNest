@@ -22,7 +22,7 @@ const SLIDES = [
   {
     img: "https://images.unsplash.com/photo-1440428099904-c6d459a7e7b5?w=900&q=80",
     title: "Morning & Evening Delivery",
-    sub: "Flexible slots, AutoPay and full control over your subscriptions.",
+    sub: "Flexible slots, easy checkout and full control over your subscriptions.",
   },
 ];
 

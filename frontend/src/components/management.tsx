@@ -37,10 +37,10 @@ export function SettingsTab() {
   return (
     <View>
       <Card style={{ marginBottom: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
-        <Txt weight="semibold">Subscription AutoPay</Txt>
+        <Txt weight="semibold">Subscription Recurring Payment</Txt>
         <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>Configure trial amount and regular charges.</Txt>
       </Card>
-      <FormField label="First AutoPay charge (₹)" testID="set-first-amt" value={String(s.subscription_first_amount ?? "")} onChange={(v) => set("subscription_first_amount", v)} keyboardType="numeric" />
+      <FormField label="First recurring charge (₹)" testID="set-first-amt" value={String(s.subscription_first_amount ?? "")} onChange={(v) => set("subscription_first_amount", v)} keyboardType="numeric" />
       <Txt size={type.sm} color={colors.muted} style={{ marginBottom: 4 }}>Regular pricing mode</Txt>
       <Row style={{ gap: spacing.sm, marginBottom: spacing.md }}>
         {["per_delivery", "flat"].map((k) => (
