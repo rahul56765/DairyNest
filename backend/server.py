@@ -300,6 +300,10 @@ class ProductIn(BaseModel):
     stock: int = 100
     milk_type: Optional[str] = None
     availability: bool = True
+    # Out-of-stock / pre-order management
+    out_of_stock: bool = False
+    next_arrival_at: Optional[str] = None  # ISO datetime
+    accept_preorders: bool = False
 
 
 class ProfileIn(BaseModel):
@@ -397,8 +401,10 @@ async def register(body: Register):
     if body.referral_code:
         await db.referrals.update_one(
             {"code": body.referral_code},
-            {"$inc": {"signups": 1, "reward_amount": 100}},
+            {"$inc": {"signups": 1}},
         )
+        # Award reward ONLY if configured trigger is "signup"
+        await _maybe_award_referral(user, trigger="signup")
     return {"token": make_token(uid, body.role), "user": clean(user)}
 
 
@@ -573,6 +579,8 @@ async def create_sub(body: SubscriptionIn, user=Depends(get_current_user)):
         "created_at": iso(now_utc()),
     }
     await db.subscriptions.insert_one(sub)
+    # Referral: trigger reward on first_subscription if configured
+    await _maybe_award_referral(user, trigger="first_subscription")
     return clean(sub)
 
 
@@ -781,7 +789,197 @@ async def validate_coupon(body: CouponValidate):
     return c
 
 
-# ------------------------- Orders / Checkout -------------------------
+# ------------------------- Inventory / Subscription / Referral helpers -------------------------
+async def decrement_inventory_for_order(order: Dict[str, Any]) -> None:
+    """Decrement product stock once per order, when it transitions to 'delivered'.
+
+    Idempotent via the `inventory_decremented` flag on the order document.
+    """
+    if not order or order.get("inventory_decremented"):
+        return
+    for it in order.get("items", []):
+        p = (it or {}).get("product") or {}
+        pid = p.get("id")
+        qty = int((it or {}).get("qty") or 0)
+        if not pid or qty <= 0:
+            continue
+        # $max ensures stock never goes below 0
+        prod = await db.products.find_one({"id": pid})
+        if not prod:
+            continue
+        new_stock = max(0, int(prod.get("stock", 0)) - qty)
+        upd = {"stock": new_stock}
+        # Auto-mark out_of_stock if depleted (admin can override)
+        if new_stock == 0 and not prod.get("out_of_stock"):
+            upd["out_of_stock"] = True
+        await db.products.update_one({"id": pid}, {"$set": upd})
+    await db.orders.update_one({"id": order["id"]}, {"$set": {"inventory_decremented": True}})
+
+
+async def _maybe_award_referral(user: Dict[str, Any], trigger: str) -> None:
+    """Awards referral reward to the referring user once, when the configured trigger fires.
+
+    trigger ∈ {"signup", "first_order", "first_subscription"}.
+    """
+    referred_by = user.get("referred_by_code")
+    if not referred_by:
+        return
+    if user.get("referral_reward_credited"):
+        return
+    settings = await get_app_settings()
+    configured = settings.get("referral_trigger", "first_order")
+    if configured != trigger:
+        return
+    amount = float(settings.get("referral_reward_amount", 50.0))
+    await db.referrals.update_one(
+        {"code": referred_by},
+        {"$inc": {"paid_orders": 1, "reward_amount": amount}},
+    )
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"referral_reward_credited": True,
+                  "referral_reward_credited_at": iso(now_utc()),
+                  "referral_reward_trigger": trigger}},
+    )
+
+
+def _sub_delivery_count_per_day(sub: Dict[str, Any]) -> int:
+    """How many deliveries a subscription produces per delivery-day.
+
+    schedule=both → 2 (morning + evening), else 1.
+    """
+    return 2 if sub.get("schedule") == "both" else 1
+
+
+def _sub_is_due_on(sub: Dict[str, Any], d: date) -> bool:
+    """Return True if this subscription is expected to deliver on date `d`.
+
+    Frequency: daily, alternate, weekly, monthly.
+    Respects skip_dates (list of YYYY-MM-DD strings) and status=='active'.
+    """
+    if sub.get("status") != "active":
+        return False
+    iso_d = d.isoformat()
+    if iso_d in (sub.get("skip_dates") or []):
+        return False
+    freq = (sub.get("frequency") or "daily").lower()
+    created_at_str = sub.get("created_at") or ""
+    try:
+        start = datetime.fromisoformat(created_at_str.replace("Z", "+00:00")).date()
+    except Exception:
+        start = d
+    if d < start:
+        return False
+    delta = (d - start).days
+    if freq == "daily":
+        return True
+    if freq == "alternate":
+        return delta % 2 == 0
+    if freq == "weekly":
+        return delta % 7 == 0
+    if freq == "monthly":
+        # same day-of-month as start, fall back to last day
+        try:
+            return d.day == start.day
+        except Exception:
+            return False
+    return True
+
+
+async def generate_subscription_orders_for_date(d: date) -> Dict[str, Any]:
+    """Create one Order per active subscription scheduled for date `d`.
+
+    Idempotent: if an order with matching subscription_id+delivery_date already exists
+    for that user, it is skipped. Returns counts.
+    """
+    iso_d = d.isoformat()
+    subs = await db.subscriptions.find({"status": "active"}).to_list(5000)
+    if not subs:
+        return {"date": iso_d, "created": 0, "skipped": 0, "subscriptions_seen": 0}
+
+    created = 0
+    skipped = 0
+    # Pre-fetch products
+    product_ids = {s.get("product_id") for s in subs if s.get("product_id")}
+    products_map: Dict[str, Dict[str, Any]] = {}
+    if product_ids:
+        prods = await db.products.find({"id": {"$in": list(product_ids)}}).to_list(len(product_ids))
+        products_map = {p["id"]: p for p in prods}
+
+    # Pre-fetch users
+    user_ids = list({s["user_id"] for s in subs})
+    users = await db.users.find({"id": {"$in": user_ids}}).to_list(len(user_ids))
+    user_map = {u["id"]: u for u in users}
+
+    for sub in subs:
+        if not _sub_is_due_on(sub, d):
+            skipped += 1
+            continue
+        cust = user_map.get(sub["user_id"])
+        if not cust:
+            skipped += 1
+            continue
+        # Skip if an order for this subscription+date already exists (idempotent)
+        existing = await db.orders.find_one({
+            "user_id": sub["user_id"],
+            "subscription_id": sub["id"],
+            "delivery_date": iso_d,
+        })
+        if existing:
+            skipped += 1
+            continue
+
+        product = products_map.get(sub.get("product_id")) or {
+            "id": sub.get("product_id"),
+            "name": sub.get("milk_type") or "Subscription Item",
+            "image": "",
+            "type": "milk",
+            "weight": sub.get("quantity_label", ""),
+            "category": sub.get("milk_type", "Milk"),
+            "milk_type": sub.get("milk_type"),
+            "price": float(sub.get("price_per_delivery") or 0),
+        }
+        qty = _sub_delivery_count_per_day(sub)
+        line_total = round(float(sub.get("price_per_delivery") or 0), 2)
+        total = line_total
+        addr = None
+        for a in cust.get("addresses", []) or []:
+            if a.get("id") == cust.get("default_address_id"):
+                addr = a
+                break
+        if not addr and (cust.get("addresses") or []):
+            addr = cust["addresses"][0]
+
+        order = {
+            "id": new_id(),
+            "user_id": sub["user_id"],
+            "items": [{"product": clean(dict(product)), "qty": qty, "line_total": line_total}],
+            "subtotal": total,
+            "delivery_charge": 0,
+            "discount": 0,
+            "first_order_bonus": 0,
+            "amount": total,
+            "slot": sub.get("schedule", "morning") if sub.get("schedule") in ("morning", "evening") else "morning",
+            "payment_method": "autopay",
+            "payment_status": "paid",  # subscription billing is paid upfront (weekly/monthly via AutoPay)
+            "razorpay_order": None,
+            "status": "received",
+            "tracking": build_tracking("received"),
+            "address": addr,
+            "agent_id": None,
+            "source": "subscription",
+            "subscription_id": sub["id"],
+            "delivery_date": iso_d,
+            "created_at": iso(now_utc()),
+            "inventory_decremented": False,
+        }
+        await db.orders.insert_one(order)
+        created += 1
+
+    return {"date": iso_d, "created": created, "skipped": skipped, "subscriptions_seen": len(subs)}
+
+
+# ------------------------- Order / Checkout -------------------------
 def build_tracking(status):
     steps = ["received", "packed", "out_for_delivery", "delivered"]
     idx = steps.index(status) if status in steps else 0
@@ -797,10 +995,14 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
     addr_id = body.address_id or user.get("default_address_id")
     addr = next((a for a in user.get("addresses", []) if a["id"] == addr_id), None)
 
-    # First-order discount: only when settings enabled AND user has no prior PAID order
+    # First-order discount: only when settings enabled AND user has not yet consumed the
+    # discount AND user has no prior PAID order. The `first_order_discount_consumed` flag
+    # is set immediately upon eligible checkout, so even if payment fails or user abandons
+    # the cart, the discount cannot be re-applied on subsequent attempts.
     settings = await get_app_settings()
     first_order_bonus = 0.0
-    if settings.get("first_order_discount_enabled"):
+    already_consumed = bool(user.get("first_order_discount_consumed"))
+    if settings.get("first_order_discount_enabled") and not already_consumed:
         prior_paid = await db.orders.count_documents({
             "user_id": user["id"],
             "payment_status": {"$in": ["paid", "cod_pending"]},
@@ -850,14 +1052,27 @@ async def checkout(body: CheckoutIn, user=Depends(get_current_user)):
         "subscription_id": body.subscription_id,
         "delivery_date": (date.today() + (timedelta(days=1) if body.slot == "next_day" else timedelta(days=0))).isoformat(),
         "created_at": iso(now_utc()),
+        "inventory_decremented": False,
     }
     await db.orders.insert_one(order)
+    # MARK first-order discount as consumed immediately upon eligible checkout — even if
+    # payment fails / user abandons. Prevents the bug where every cart-attempt re-applied
+    # the discount when the previous attempt never reached `payment_status="paid"`.
+    if first_order_bonus > 0:
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"first_order_discount_consumed": True,
+                      "first_order_discount_consumed_at": iso(now_utc()),
+                      "first_order_discount_order_id": oid}},
+        )
     # clear cart
     await db.carts.update_one({"user_id": user["id"]}, {"$set": {"items": [], "coupon": None}})
     # Notify customer their order was placed
     await notify_user(user["id"], "Order Placed 🛒",
                       f"Order #{oid[:8].upper()} received — total ₹{final_total}",
                       {"kind": "order", "order_id": oid, "status": "received"})
+    # Referral: trigger reward on first_order if configured
+    await _maybe_award_referral(user, trigger="first_order")
     return {"order": clean(order), "razorpay_key_id": RAZORPAY_KEY_ID if RAZORPAY_LIVE else None,
             "simulated": not RAZORPAY_LIVE, "first_order_bonus": first_order_bonus}
 
@@ -875,10 +1090,10 @@ async def confirm_payment(oid: str, user=Depends(get_current_user)):
         {"id": oid},
         {"$set": {"payment_status": "paid", "status": "received", "tracking": build_tracking("received")}},
     )
-    # referral: first paid order
-    if user.get("referred_by_code"):
-        await db.referrals.update_one({"code": user["referred_by_code"]},
-                                      {"$inc": {"paid_orders": 1, "reward_amount": 50}})
+    # referral: first paid order — gated by configured trigger
+    fresh_user = await db.users.find_one({"id": user["id"]})
+    if fresh_user:
+        await _maybe_award_referral(clean(fresh_user), trigger="first_order")
     # Notify customer payment confirmed
     await notify_user(user["id"], "Payment Confirmed 💳",
                       f"Payment received for order #{oid[:8].upper()}. Your order has been received and will be packed shortly.",
@@ -1059,6 +1274,11 @@ async def agent_delivery_status(oid: str, body: DeliveryStatusIn, user=Depends(r
            "delivery_proof": {"photo": body.photo, "otp": body.otp, "note": body.note,
                               "result": body.status, "at": iso(now_utc())}}
     await db.orders.update_one({"id": oid}, {"$set": upd})
+    # Decrement inventory on delivered (idempotent)
+    if new_status == "delivered":
+        fresh = await db.orders.find_one({"id": oid})
+        if fresh:
+            await decrement_inventory_for_order(fresh)
     # Push notification to customer
     if order.get("user_id"):
         if new_status == "delivered":
@@ -1264,12 +1484,42 @@ async def enrich_orders(orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 @api.get("/admin/orders")
-async def admin_orders(status: Optional[str] = None, user=Depends(admin_or_manager())):
-    q = {}
+async def admin_orders(
+    status: Optional[str] = None,
+    kind: Optional[str] = None,
+    delivery_date: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user=Depends(admin_or_manager()),
+):
+    """List admin orders.
+
+    Query params:
+      status        — filter by order status
+      kind          — "subscription" | "normal" | "all" (filter after enrichment)
+      delivery_date — exact YYYY-MM-DD match on delivery_date (historical view)
+      date_from / date_to — range filter on created_at (inclusive)
+    """
+    q: Dict[str, Any] = {}
     if status:
         q["status"] = status
-    orders = await db.orders.find(q).sort("created_at", -1).to_list(500)
-    return await enrich_orders([clean(o) for o in orders])
+    if delivery_date:
+        q["delivery_date"] = delivery_date
+    if date_from or date_to:
+        q.setdefault("created_at", {})
+        if date_from:
+            q["created_at"]["$gte"] = date_from
+        if date_to:
+            # inclusive end: append time so YYYY-MM-DD covers full day
+            end = date_to if len(date_to) > 10 else f"{date_to}T23:59:59"
+            q["created_at"]["$lte"] = end
+    orders = await db.orders.find(q).sort("created_at", -1).to_list(1000)
+    enriched = await enrich_orders([clean(o) for o in orders])
+    if kind == "subscription":
+        enriched = [o for o in enriched if o.get("is_subscription")]
+    elif kind == "normal":
+        enriched = [o for o in enriched if not o.get("is_subscription")]
+    return enriched
 
 
 @api.get("/admin/orders/{oid}")
@@ -1281,6 +1531,131 @@ async def admin_order_detail(oid: str, user=Depends(admin_or_manager())):
     return enriched[0]
 
 
+# ----- Subscription calendar + daily order generation -----
+@api.get("/admin/subscriptions")
+async def admin_list_subscriptions(
+    status: Optional[str] = None,
+    user=Depends(admin_or_manager()),
+):
+    """List all subscriptions with customer info, for admin tracking."""
+    q: Dict[str, Any] = {}
+    if status:
+        q["status"] = status
+    subs = await db.subscriptions.find(q).sort("created_at", -1).to_list(2000)
+    if not subs:
+        return []
+    user_ids = list({s.get("user_id") for s in subs if s.get("user_id")})
+    users = await db.users.find({"id": {"$in": user_ids}}).to_list(len(user_ids))
+    umap = {u["id"]: u for u in users}
+    out = []
+    for s in subs:
+        s = clean(s)
+        u = umap.get(s.get("user_id")) or {}
+        s["customer"] = {"id": u.get("id"), "name": u.get("name") or "—",
+                         "phone": u.get("phone") or ""}
+        out.append(s)
+    return out
+
+
+@api.get("/admin/subscriptions/calendar")
+async def admin_subscriptions_calendar(
+    date_from: str,
+    date_to: str,
+    user=Depends(admin_or_manager()),
+):
+    """Returns a day-by-day map of expected subscription deliveries within a range.
+
+    Response: {dates: [{date, count, deliveries: [{subscription_id, user_id, name, phone,
+                    milk_type, quantity_label, schedule, frequency, price_per_delivery}, ...]}]}
+    """
+    try:
+        d_from = date.fromisoformat(date_from)
+        d_to = date.fromisoformat(date_to)
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be YYYY-MM-DD")
+    if d_to < d_from:
+        raise HTTPException(400, "date_to must be >= date_from")
+    if (d_to - d_from).days > 366:
+        raise HTTPException(400, "range too large (max 366 days)")
+
+    subs = await db.subscriptions.find({"status": "active"}).to_list(5000)
+    user_ids = list({s["user_id"] for s in subs})
+    users = await db.users.find({"id": {"$in": user_ids}}).to_list(len(user_ids))
+    umap = {u["id"]: u for u in users}
+
+    out_dates = []
+    days = (d_to - d_from).days + 1
+    for i in range(days):
+        d = d_from + timedelta(days=i)
+        day_list = []
+        for s in subs:
+            if _sub_is_due_on(s, d):
+                u = umap.get(s["user_id"]) or {}
+                day_list.append({
+                    "subscription_id": s.get("id"),
+                    "user_id": s.get("user_id"),
+                    "name": u.get("name") or "—",
+                    "phone": u.get("phone") or "",
+                    "milk_type": s.get("milk_type"),
+                    "quantity_label": s.get("quantity_label"),
+                    "schedule": s.get("schedule"),
+                    "frequency": s.get("frequency"),
+                    "price_per_delivery": s.get("price_per_delivery"),
+                })
+        out_dates.append({"date": d.isoformat(), "count": len(day_list), "deliveries": day_list})
+    return {"from": d_from.isoformat(), "to": d_to.isoformat(), "dates": out_dates}
+
+
+@api.post("/admin/subscriptions/generate-daily")
+async def admin_generate_daily(
+    date_str: Optional[str] = None,
+    user=Depends(admin_or_manager()),
+):
+    """Generate orders from active subscriptions for the given date (default today).
+
+    Idempotent: skips subscriptions that already have an order for that delivery_date.
+    """
+    if date_str:
+        try:
+            d = date.fromisoformat(date_str)
+        except Exception:
+            raise HTTPException(400, "date must be YYYY-MM-DD")
+    else:
+        d = date.today()
+    result = await generate_subscription_orders_for_date(d)
+    return result
+
+
+# ----- Delete product permanently (hard delete) -----
+@api.delete("/admin/products/{pid}/hard")
+async def admin_delete_product_hard(pid: str, user=Depends(admin_or_manager())):
+    """Permanently remove product from catalog. Old orders keep their snapshots intact."""
+    p = await db.products.find_one({"id": pid})
+    if not p:
+        raise HTTPException(404, "Product not found")
+    await db.products.delete_one({"id": pid})
+    return {"deleted": True, "id": pid}
+
+
+@api.put("/admin/products/{pid}/stock-status")
+async def admin_update_stock_status(pid: str, body: Dict[str, Any], user=Depends(admin_or_manager())):
+    """Update out-of-stock state + next arrival + pre-order acceptance for a product."""
+    upd: Dict[str, Any] = {}
+    if "out_of_stock" in body:
+        upd["out_of_stock"] = bool(body["out_of_stock"])
+    if "next_arrival_at" in body:
+        upd["next_arrival_at"] = body["next_arrival_at"] or None
+    if "accept_preorders" in body:
+        upd["accept_preorders"] = bool(body["accept_preorders"])
+    if not upd:
+        raise HTTPException(400, "No fields to update")
+    p = await db.products.find_one({"id": pid})
+    if not p:
+        raise HTTPException(404, "Product not found")
+    await db.products.update_one({"id": pid}, {"$set": upd})
+    return clean(await db.products.find_one({"id": pid}))
+
+
 @api.put("/admin/orders/{oid}/status")
 async def admin_order_status(oid: str, body: DeliveryStatusIn, user=Depends(admin_or_manager())):
     s = body.status
@@ -1289,6 +1664,9 @@ async def admin_order_status(oid: str, body: DeliveryStatusIn, user=Depends(admi
         upd["tracking"] = build_tracking(s)
     await db.orders.update_one({"id": oid}, {"$set": upd})
     order = await db.orders.find_one({"id": oid})
+    # Decrement inventory ONLY on transition to delivered (idempotent)
+    if order and s == "delivered":
+        await decrement_inventory_for_order(order)
     if order and order.get("user_id"):
         status_msgs = {
             "received": ("Order Received", "We've received your order and will start packing soon."),
@@ -1498,6 +1876,20 @@ def _default_settings():
         "first_order_discount_percent": 20,
         "first_order_discount_max": 100,            # max ₹ off
         "min_order_for_first_discount": 0,
+        # Delivery time windows
+        "morning_window_start": "06:00",
+        "morning_window_end": "10:00",
+        "evening_window_start": "17:00",
+        "evening_window_end": "20:00",
+        # Referral configuration
+        "referral_trigger": "first_order",  # signup | first_order | first_subscription
+        "referral_reward_amount": 50.0,
+        # App download link (used in referral shares)
+        "app_download_link": "https://play.google.com/store/apps/details?id=com.dairynest",
+        # Support contact
+        "support_phone": "+91 9000000003",
+        "support_phone_alt": "",
+        "support_email": "support@dairynest.app",
         "updated_at": iso(now_utc()),
     }
 
@@ -1521,6 +1913,14 @@ async def get_public_settings():
         "subscription_first_amount": s.get("subscription_first_amount", 1.0),
         "subscription_pricing_mode": s.get("subscription_pricing_mode", "per_delivery"),
         "subscription_regular_flat_amount": s.get("subscription_regular_flat_amount", 0.0),
+        "morning_window_start": s.get("morning_window_start", "06:00"),
+        "morning_window_end": s.get("morning_window_end", "10:00"),
+        "evening_window_start": s.get("evening_window_start", "17:00"),
+        "evening_window_end": s.get("evening_window_end", "20:00"),
+        "app_download_link": s.get("app_download_link", ""),
+        "support_phone": s.get("support_phone", ""),
+        "support_phone_alt": s.get("support_phone_alt", ""),
+        "support_email": s.get("support_email", ""),
     }
 
 
@@ -1537,6 +1937,20 @@ class SettingsIn(BaseModel):
     first_order_discount_percent: Optional[int] = None
     first_order_discount_max: Optional[int] = None
     min_order_for_first_discount: Optional[int] = None
+    # Delivery windows
+    morning_window_start: Optional[str] = None
+    morning_window_end: Optional[str] = None
+    evening_window_start: Optional[str] = None
+    evening_window_end: Optional[str] = None
+    # Referrals
+    referral_trigger: Optional[str] = None
+    referral_reward_amount: Optional[float] = None
+    # App download link
+    app_download_link: Optional[str] = None
+    # Support contact
+    support_phone: Optional[str] = None
+    support_phone_alt: Optional[str] = None
+    support_email: Optional[str] = None
 
 
 @api.put("/admin/settings")
@@ -1544,6 +1958,8 @@ async def admin_update_settings(body: SettingsIn, user=Depends(strict_admin)):
     upd = {k: v for k, v in body.model_dump().items() if v is not None}
     if upd.get("subscription_pricing_mode") and upd["subscription_pricing_mode"] not in ("per_delivery", "flat"):
         raise HTTPException(400, "invalid subscription_pricing_mode")
+    if upd.get("referral_trigger") and upd["referral_trigger"] not in ("signup", "first_order", "first_subscription"):
+        raise HTTPException(400, "invalid referral_trigger")
     upd["updated_at"] = iso(now_utc())
     await db.app_settings.update_one({"key": SETTINGS_KEY}, {"$set": upd}, upsert=True)
     return await get_app_settings()

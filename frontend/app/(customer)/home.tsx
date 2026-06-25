@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { View, StyleSheet, ScrollView, Pressable, RefreshControl } from "react-native";
+import { useState, useCallback, useEffect } from "react";
+import { View, StyleSheet, ScrollView, Pressable, RefreshControl, Dimensions, Image as RNImage } from "react-native";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "expo-router";
 import { Image } from "expo-image";
@@ -18,12 +18,19 @@ const CATEGORIES = [
   { key: "produce", label: "Fruits & Vegetables", Icon: Carrot, route: "/catalog?type=fruit,vegetable", tag: "Farm fresh, daily picks", bg: "#FBEEDC" },
 ];
 
+const SCREEN_W = Dimensions.get("window").width;
+const BANNER_W = SCREEN_W - spacing.lg * 2;
+const MIN_BANNER_H = 140;
+const MAX_BANNER_H = 280;
+
 export default function Home() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
   const [subs, setSubs] = useState<any[]>([]);
   const [banners, setBanners] = useState<any[]>([]);
+  // Per-banner aspect ratios — banner.image dimensions probed via RNImage.getSize
+  const [bannerAspects, setBannerAspects] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -41,6 +48,32 @@ export default function Home() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Probe each banner image to learn its native aspect ratio so the container can
+  // adapt without cropping/stretching/letterboxing.
+  useEffect(() => {
+    banners.forEach((b) => {
+      if (!b.image || bannerAspects[b.id]) return;
+      const onSize = (w: number, h: number) => {
+        if (!w || !h) return;
+        const ratio = w / h;
+        setBannerAspects((prev) => ({ ...prev, [b.id]: ratio }));
+      };
+      try {
+        RNImage.getSize(
+          b.image,
+          onSize,
+          () => {
+            // Fallback to 16:9 if size can't be determined
+            setBannerAspects((prev) => ({ ...prev, [b.id]: 16 / 9 }));
+          },
+        );
+      } catch {
+        setBannerAspects((prev) => ({ ...prev, [b.id]: 16 / 9 }));
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [banners]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good Morning" : hour < 17 ? "Good Afternoon" : "Good Evening";
@@ -70,48 +103,60 @@ export default function Home() {
 
       <LocationBanner />
 
-      {/* Hero — admin-managed banners carousel (if any), else default offer */}
+      {/* Hero — admin-managed banners carousel (adaptive aspect ratio) */}
       {banners.length > 0 ? (
         <ScrollView
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
           style={{ marginTop: spacing.sm }}
+          contentContainerStyle={{ paddingHorizontal: spacing.lg }}
         >
-          {banners.map((b) => (
-            <Pressable
-              key={b.id}
-              testID={`banner-${b.id}`}
-              onPress={() => b.cta_route ? router.push(b.cta_route as any) : null}
-              style={styles.hero}
-            >
-              {!!b.image && (
-                <Image source={{ uri: b.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
-              )}
-              <LinearGradient colors={["transparent", "rgba(44,66,48,0.85)"]} style={StyleSheet.absoluteFill} />
-              <View style={styles.heroContent}>
-                {!!b.badge && <Badge label={b.badge} color={colors.surfaceInverse} bg={colors.warning} />}
-                {!!b.title && (
-                  <Txt display weight="semibold" size={type["2xl"]} color={colors.onBrandPrimary} style={{ marginTop: spacing.sm }} numberOfLines={2}>
-                    {b.title}
-                  </Txt>
+          {banners.map((b, idx) => {
+            const aspect = bannerAspects[b.id] || 16 / 9;
+            // Compute height from aspect, clamp to readable bounds
+            const rawH = BANNER_W / aspect;
+            const heroH = Math.max(MIN_BANNER_H, Math.min(MAX_BANNER_H, rawH));
+            const hasText = !!(b.title || b.subtitle || b.badge || b.cta_label);
+            return (
+              <Pressable
+                key={b.id}
+                testID={`banner-${b.id}`}
+                onPress={() => b.cta_route ? router.push(b.cta_route as any) : null}
+                style={[styles.hero, { width: BANNER_W, height: heroH, marginRight: idx === banners.length - 1 ? 0 : spacing.md }]}
+              >
+                {!!b.image && (
+                  <Image source={{ uri: b.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
                 )}
-                {!!b.subtitle && (
-                  <Txt color={colors.onBrandPrimary} size={type.sm} style={{ opacity: 0.9, marginTop: 4 }} numberOfLines={2}>
-                    {b.subtitle}
-                  </Txt>
+                {hasText && (
+                  <LinearGradient colors={["transparent", "rgba(44,66,48,0.85)"]} style={StyleSheet.absoluteFill} />
                 )}
-                {!!b.cta_label && (
-                  <View style={styles.heroCta}>
-                    <Txt weight="semibold" color={colors.brandPrimary}>{b.cta_label} →</Txt>
+                {hasText && (
+                  <View style={styles.heroContent}>
+                    {!!b.badge && <Badge label={b.badge} color={colors.surfaceInverse} bg={colors.warning} />}
+                    {!!b.title && (
+                      <Txt display weight="semibold" size={type["2xl"]} color={colors.onBrandPrimary} style={{ marginTop: spacing.sm }} numberOfLines={2}>
+                        {b.title}
+                      </Txt>
+                    )}
+                    {!!b.subtitle && (
+                      <Txt color={colors.onBrandPrimary} size={type.sm} style={{ opacity: 0.9, marginTop: 4 }} numberOfLines={2}>
+                        {b.subtitle}
+                      </Txt>
+                    )}
+                    {!!b.cta_label && (
+                      <View style={styles.heroCta}>
+                        <Txt weight="semibold" color={colors.brandPrimary}>{b.cta_label} →</Txt>
+                      </View>
+                    )}
                   </View>
                 )}
-              </View>
-            </Pressable>
-          ))}
+              </Pressable>
+            );
+          })}
         </ScrollView>
       ) : (
-        <Pressable testID="hero-banner" onPress={() => router.push("/(customer)/subscription")} style={styles.hero}>
+        <Pressable testID="hero-banner" onPress={() => router.push("/(customer)/subscription")} style={[styles.hero, { width: BANNER_W, height: 180, marginHorizontal: spacing.lg }]}>
           <Image source={{ uri: "https://images.unsplash.com/photo-1768850418252-37af725e46bb?w=900&q=80" }} style={StyleSheet.absoluteFill} contentFit="cover" />
           <LinearGradient colors={["transparent", "rgba(44,66,48,0.85)"]} style={StyleSheet.absoluteFill} />
           <View style={styles.heroContent}>
@@ -173,7 +218,7 @@ export default function Home() {
 const styles = StyleSheet.create({
   head: { flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   bell: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border },
-  hero: { height: 180, marginHorizontal: spacing.lg, borderRadius: radius.lg, overflow: "hidden", ...shadow.card },
+  hero: { marginHorizontal: 0, borderRadius: radius.lg, overflow: "hidden", ...shadow.card },
   heroContent: { flex: 1, padding: spacing.lg, justifyContent: "flex-end" },
   heroCta: { backgroundColor: colors.onBrandPrimary, alignSelf: "flex-start", paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radius.pill, marginTop: spacing.md },
   quickWrap: { paddingHorizontal: spacing.lg, marginTop: spacing.xl, gap: spacing.md },

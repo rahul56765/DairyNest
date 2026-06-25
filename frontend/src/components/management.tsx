@@ -29,14 +29,31 @@ export function SettingsTab() {
         first_order_discount_percent: parseInt(s.first_order_discount_percent) || 0,
         first_order_discount_max: parseInt(s.first_order_discount_max) || 0,
         min_order_for_first_discount: parseInt(s.min_order_for_first_discount) || 0,
+        morning_window_start: s.morning_window_start || "06:00",
+        morning_window_end: s.morning_window_end || "10:00",
+        evening_window_start: s.evening_window_start || "17:00",
+        evening_window_end: s.evening_window_end || "20:00",
+        referral_trigger: s.referral_trigger || "first_order",
+        referral_reward_amount: parseFloat(s.referral_reward_amount) || 0,
+        app_download_link: s.app_download_link || "",
+        support_phone: s.support_phone || "",
+        support_phone_alt: s.support_phone_alt || "",
+        support_email: s.support_email || "",
       });
       setS(r);
       toast.show("Settings saved", "success");
     } catch (e: any) { toast.show(e.message, "error"); } finally { setBusy(false); }
   };
 
+  const REF_TRIGGERS: { k: string; label: string }[] = [
+    { k: "signup", label: "On Signup" },
+    { k: "first_order", label: "First Order" },
+    { k: "first_subscription", label: "First Subscription" },
+  ];
+
   return (
     <View>
+      {/* Subscription Recurring */}
       <Card style={{ marginBottom: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
         <Txt weight="semibold">Subscription Recurring Payment</Txt>
         <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>Configure trial amount and regular charges.</Txt>
@@ -54,9 +71,10 @@ export function SettingsTab() {
         <FormField label="Regular flat amount per cycle (₹)" testID="set-flat" value={String(s.subscription_regular_flat_amount ?? "")} onChange={(v) => set("subscription_regular_flat_amount", v)} keyboardType="numeric" />
       )}
 
+      {/* First-time Buyer Offer */}
       <Card style={{ marginVertical: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
         <Txt weight="semibold">First-time Buyer Offer</Txt>
-        <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>Discount auto-applied on the first order.</Txt>
+        <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>Discount auto-applied on the first order. Each customer can get this only once.</Txt>
       </Card>
       <Pressable testID="set-firstoff-toggle" onPress={() => set("first_order_discount_enabled", !s.first_order_discount_enabled)} style={[styles.permRow, { paddingHorizontal: 4 }]}>
         <View style={[styles.checkbox, s.first_order_discount_enabled && styles.checkboxOn]}>
@@ -67,6 +85,55 @@ export function SettingsTab() {
       <FormField label="Discount %" testID="set-pct" value={String(s.first_order_discount_percent ?? "")} onChange={(v) => set("first_order_discount_percent", v)} keyboardType="numeric" />
       <FormField label="Max discount (₹)" testID="set-max" value={String(s.first_order_discount_max ?? "")} onChange={(v) => set("first_order_discount_max", v)} keyboardType="numeric" />
       <FormField label="Minimum order (₹) to qualify" testID="set-min" value={String(s.min_order_for_first_discount ?? "")} onChange={(v) => set("min_order_for_first_discount", v)} keyboardType="numeric" />
+
+      {/* Delivery time windows */}
+      <Card style={{ marginVertical: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
+        <Txt weight="semibold">Delivery Time Windows</Txt>
+        <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>Hours shown to customers for morning &amp; evening slots (24-hour format, e.g. 06:00).</Txt>
+      </Card>
+      <Row style={{ gap: spacing.sm }}>
+        <View style={{ flex: 1 }}>
+          <FormField label="Morning start" testID="set-morning-start" value={s.morning_window_start || ""} onChange={(v) => set("morning_window_start", v)} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <FormField label="Morning end" testID="set-morning-end" value={s.morning_window_end || ""} onChange={(v) => set("morning_window_end", v)} />
+        </View>
+      </Row>
+      <Row style={{ gap: spacing.sm }}>
+        <View style={{ flex: 1 }}>
+          <FormField label="Evening start" testID="set-evening-start" value={s.evening_window_start || ""} onChange={(v) => set("evening_window_start", v)} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <FormField label="Evening end" testID="set-evening-end" value={s.evening_window_end || ""} onChange={(v) => set("evening_window_end", v)} />
+        </View>
+      </Row>
+
+      {/* Referrals */}
+      <Card style={{ marginVertical: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
+        <Txt weight="semibold">Referrals &amp; Rewards</Txt>
+        <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>When does a referrer earn their reward?</Txt>
+      </Card>
+      <Row style={{ gap: spacing.sm, marginBottom: spacing.md, flexWrap: "wrap" }}>
+        {REF_TRIGGERS.map((t) => {
+          const on = s.referral_trigger === t.k;
+          return (
+            <Pressable key={t.k} testID={`set-ref-${t.k}`} onPress={() => set("referral_trigger", t.k)} style={[styles.typePill, on && styles.typePillActive, { flex: 1, paddingHorizontal: spacing.sm }]}>
+              <Txt weight="semibold" size={type.sm} color={on ? colors.onBrandPrimary : colors.onSurface}>{t.label}</Txt>
+            </Pressable>
+          );
+        })}
+      </Row>
+      <FormField label="Reward per referral (₹)" testID="set-ref-amount" value={String(s.referral_reward_amount ?? "")} onChange={(v) => set("referral_reward_amount", v)} keyboardType="numeric" />
+      <FormField label="App download link (used in referral shares)" testID="set-app-link" value={s.app_download_link || ""} onChange={(v) => set("app_download_link", v)} />
+
+      {/* Support contact */}
+      <Card style={{ marginVertical: spacing.md, backgroundColor: colors.brandTertiary, borderColor: colors.brandSecondary }}>
+        <Txt weight="semibold">Customer Support Contact</Txt>
+        <Txt color={colors.muted} size={type.sm} style={{ marginTop: 4 }}>Shown across the app on Help / Support screens.</Txt>
+      </Card>
+      <FormField label="Primary support phone" testID="set-support-phone" value={s.support_phone || ""} onChange={(v) => set("support_phone", v)} />
+      <FormField label="Alternate support phone (optional)" testID="set-support-alt" value={s.support_phone_alt || ""} onChange={(v) => set("support_phone_alt", v)} />
+      <FormField label="Support email" testID="set-support-email" value={s.support_email || ""} onChange={(v) => set("support_email", v)} />
 
       <Button title="Save Settings" loading={busy} onPress={save} testID="set-save" style={{ marginTop: spacing.md }} />
     </View>
@@ -150,6 +217,7 @@ export function ProductsTab() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<any | null>(null);
   const [creating, setCreating] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<any | null>(null);
 
   const load = useCallback(async () => {
     try { setItems(await api.get("/admin/products")); } catch {}
@@ -158,6 +226,14 @@ export function ProductsTab() {
   useEffect(() => { load(); }, [load]);
 
   const disable = async (id: string) => { await api.del(`/admin/products/${id}`); toast.show("Product disabled", "info"); load(); };
+  const hardDelete = async (id: string) => {
+    try { await api.del(`/admin/products/${id}/hard`); toast.show("Product permanently deleted", "success"); setConfirmDelete(null); load(); }
+    catch (e: any) { toast.show(e.message, "error"); }
+  };
+  const toggleStockStatus = async (p: any, patch: any) => {
+    try { await api.put(`/admin/products/${p.id}/stock-status`, patch); load(); }
+    catch (e: any) { toast.show(e.message, "error"); }
+  };
 
   if (loading) return <Loading />;
   return (
@@ -169,16 +245,58 @@ export function ProductsTab() {
             <View style={{ flex: 1, paddingRight: spacing.sm }}>
               <Txt weight="semibold">{p.name}</Txt>
               <Txt color={colors.muted} size={type.sm}>{p.category} · ₹{p.price} · stock {p.stock}</Txt>
+              {p.out_of_stock && (
+                <Row style={{ gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                  <Badge label="OUT OF STOCK" color={colors.error} bg="#F7E1E1" />
+                  {p.accept_preorders && <Badge label="Pre-orders ON" color={colors.info} bg="#E4ECF6" />}
+                  {p.next_arrival_at && <Badge label={`Arrives ${p.next_arrival_at}`} color={colors.warning} bg="#FBEEDC" />}
+                </Row>
+              )}
             </View>
             <Badge label={p.active ? "Active" : "Disabled"} color={p.active ? colors.success : colors.muted} bg={p.active ? "#E3F0E8" : colors.surfaceTertiary} />
           </Row>
-          <Row style={{ gap: spacing.sm, marginTop: spacing.sm }}>
-            <Button title="Edit" variant="outline" onPress={() => setEditing(p)} testID={`edit-${p.id}`} style={{ flex: 1, height: 38 }} />
-            {p.active && <Button title="Disable" variant="outline" onPress={() => disable(p.id)} style={{ flex: 1, height: 38 }} testID={`disable-${p.id}`} />}
+
+          {/* Stock status quick toggles */}
+          <View style={{ marginTop: spacing.sm, padding: spacing.sm, backgroundColor: colors.surfaceTertiary, borderRadius: radius.md }}>
+            <Row style={{ justifyContent: "space-between", marginBottom: 4 }}>
+              <Txt weight="medium" size={type.sm}>Out of stock</Txt>
+              <Switch testID={`p-oos-${p.id}`} value={!!p.out_of_stock} onValueChange={(v) => toggleStockStatus(p, { out_of_stock: v })} trackColor={{ true: colors.error, false: colors.borderStrong }} />
+            </Row>
+            {p.out_of_stock && (
+              <>
+                <FormField label="Next arrival (e.g. 2026-09-01 09:00)" testID={`p-arr-${p.id}`} value={p.next_arrival_at || ""} onChange={(v) => toggleStockStatus(p, { next_arrival_at: v })} />
+                <Row style={{ justifyContent: "space-between", marginTop: 4 }}>
+                  <Txt weight="medium" size={type.sm}>Accept pre-orders</Txt>
+                  <Switch testID={`p-pre-${p.id}`} value={!!p.accept_preorders} onValueChange={(v) => toggleStockStatus(p, { accept_preorders: v })} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} />
+                </Row>
+              </>
+            )}
+          </View>
+
+          <Row style={{ gap: spacing.sm, marginTop: spacing.sm, flexWrap: "wrap" }}>
+            <Button title="Edit" variant="outline" onPress={() => setEditing(p)} testID={`edit-${p.id}`} style={{ flex: 1, height: 38, minWidth: 90 }} />
+            {p.active && <Button title="Disable" variant="outline" onPress={() => disable(p.id)} style={{ flex: 1, height: 38, minWidth: 90 }} testID={`disable-${p.id}`} />}
+            <Button title="Delete" variant="outline" onPress={() => setConfirmDelete(p)} style={{ flex: 1, height: 38, minWidth: 90, borderColor: colors.error }} testID={`harddel-${p.id}`} />
           </Row>
         </Card>
       ))}
       <ProductFormModal visible={creating || !!editing} initial={editing} onClose={() => { setEditing(null); setCreating(false); }} onSaved={() => { setEditing(null); setCreating(false); load(); }} />
+
+      {/* Confirm hard delete */}
+      <Modal visible={!!confirmDelete} transparent animationType="fade" onRequestClose={() => setConfirmDelete(null)}>
+        <View style={[styles.modalWrap, { justifyContent: "center", padding: spacing.lg }]}>
+          <View style={[styles.modal, { borderRadius: radius.lg }]}>
+            <Txt display weight="semibold" size={type.xl}>Permanently delete?</Txt>
+            <Txt color={colors.muted} style={{ marginTop: spacing.sm }}>
+              "{confirmDelete?.name}" will be removed from the catalog. Past orders keep their snapshots intact.
+            </Txt>
+            <Row style={{ gap: spacing.md, marginTop: spacing.lg }}>
+              <Button title="Cancel" variant="outline" onPress={() => setConfirmDelete(null)} style={{ flex: 1 }} testID="harddel-cancel" />
+              <Button title="Delete" onPress={() => confirmDelete && hardDelete(confirmDelete.id)} style={{ flex: 1, backgroundColor: colors.error }} testID="harddel-confirm" />
+            </Row>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -188,7 +306,7 @@ function ProductFormModal({ visible, initial, onClose, onSaved }: { visible: boo
   const [form, setForm] = useState<any>({});
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    setForm(initial || { type: "milk", category: "", name: "", price: 0, stock: 100, unit: "litre", weight: "1 L", image: "", farm_source: "", organic: false, milk_type: null, availability: true });
+    setForm(initial || { type: "milk", category: "", name: "", price: 0, stock: 100, unit: "litre", weight: "1 L", image: "", farm_source: "", organic: false, milk_type: null, availability: true, out_of_stock: false, next_arrival_at: "", accept_preorders: false });
   }, [initial]);
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 

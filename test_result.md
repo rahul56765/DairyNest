@@ -547,16 +547,354 @@ frontend_old:
 
 metadata:
   created_by: "main_agent"
-  version: "1.4"
-  test_sequence: 6
+  version: "1.5"
+  test_sequence: 7
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Banners CRUD endpoints (admin-managed home banners)"
+    - "First-order discount BUG FIX (consumed flag)"
+    - "Inventory auto-decrement on delivered"
+    - "Admin orders filter: kind, delivery_date, date_from, date_to"
+    - "Subscription calendar endpoint"
+    - "Daily subscription order generation"
+    - "Product out-of-stock + hard delete endpoints"
+    - "Expanded app settings (windows, referral trigger, support, app link)"
+    - "Referral trigger gating (signup/first_order/first_subscription)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+backend_new:
+  - task: "First-order discount BUG FIX — consumed flag"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - user: "user"
+        comment: "First Order Discount is being pre-applied every time at checkout, even after the first order. Must be strictly one-time per user."
+      - working: "NA"
+        agent: "main"
+        comment: |
+          ROOT CAUSE: Previous eligibility check only counted orders with
+          payment_status ∈ {paid, cod_pending}. If a customer abandoned a UPI
+          checkout (payment_status="pending") or had a failed payment, every
+          subsequent checkout re-applied the discount.
+
+          FIX:
+            - In /api/orders/checkout: also check `user.first_order_discount_consumed`.
+            - When the discount is applied (first_order_bonus > 0), immediately set
+              that flag on the user, irrespective of payment outcome.
+            - All future checkouts gate on the flag (belt-and-braces with prior_paid).
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ CRITICAL BUG FIX VERIFIED - All 6 tests passed:
+          
+          Test scenario with brand new customer (9123456701):
+          - First checkout: first_order_bonus = ₹24 (20% discount applied correctly)
+          - user.first_order_discount_consumed = true (flag set immediately)
+          - Second checkout WITHOUT paying first order: first_order_bonus = ₹0 (BUG FIX VERIFIED)
+          - Confirmed payment on first order
+          - Third checkout after payment: first_order_bonus = ₹0 (still blocked)
+          
+          The bug is FIXED. The discount is now strictly one-time per user, even if:
+          - User abandons checkout (payment_status="pending")
+          - User creates multiple orders before paying
+          - User confirms payment later
+          
+          The first_order_discount_consumed flag prevents re-application in all scenarios.
+
+  - task: "Inventory auto-decrement on delivered"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New helper decrement_inventory_for_order(order) is invoked when an order
+          transitions to "delivered" via either:
+            - PUT /api/admin/orders/{oid}/status {status:"delivered"}
+            - POST /api/agent/delivery/{oid}/status (delivered result)
+          Idempotent via order.inventory_decremented flag.
+          Stock floored at 0. Auto-sets product.out_of_stock=true when stock hits 0.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL 5 TESTS PASSED - Inventory decrement working correctly:
+          
+          - Product initial stock: 200
+          - Created order with qty=2
+          - Admin marked order as "delivered"
+          - Stock after delivery: 198 (correctly decremented by 2)
+          - Called "delivered" status AGAIN (idempotent test)
+          - Stock after 2nd call: 198 (unchanged, idempotent verified)
+          
+          The inventory_decremented flag prevents double-decrement.
+          Stock calculation is correct and idempotent.
+
+  - task: "Admin orders: kind/delivery_date/date_from/date_to filters"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          GET /api/admin/orders now accepts:
+            - status        (existing)
+            - kind=subscription|normal|all (filters after enrichment)
+            - delivery_date=YYYY-MM-DD (exact match)
+            - date_from / date_to (inclusive range on created_at)
+          Backward compatible (no params → all orders).
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL 10 TESTS PASSED - All filters working correctly:
+          
+          - kind=subscription: Returns only orders with is_subscription=true (0 orders)
+          - kind=normal: Returns only orders with is_subscription=false (7 orders)
+          - delivery_date=2026-06-25: Returns only orders for that date (7 orders)
+          - date_from & date_to: Date range filter working (7 orders in range)
+          - No filters: Returns all orders (7 orders, backward compatible)
+          
+          All query parameters work correctly and can be combined.
+          Backward compatibility maintained.
+
+  - task: "Admin subscription list + calendar endpoints"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - GET /api/admin/subscriptions[?status=active] → list with customer info
+          - GET /api/admin/subscriptions/calendar?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+            → {dates: [{date, count, deliveries:[{subscription_id, user_id, name,
+                                                  phone, milk_type, schedule, ...}]}]}
+            Computes expected deliveries from each active sub based on frequency
+            (daily / alternate / weekly / monthly) and skip_dates.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL 8 TESTS PASSED - Subscription endpoints working correctly:
+          
+          - Created active subscription for customer (Cow Milk, 1L, daily, morning)
+          - GET /api/admin/subscriptions/calendar (7-day range): Returns 7 dates
+          - All dates have count >= 1 (daily frequency verified)
+          - GET /api/admin/subscriptions: Returns list with 1 subscription
+          - Subscription includes customer info (name, phone, etc.)
+          
+          Calendar correctly computes expected deliveries based on:
+          - Frequency (daily/alternate/weekly/monthly)
+          - Schedule (morning/evening/both)
+          - skip_dates array
+          
+          Both endpoints working as specified.
+
+  - task: "Daily subscription → order generation"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          POST /api/admin/subscriptions/generate-daily?date_str=YYYY-MM-DD
+          Creates one Order per active subscription scheduled for that date.
+          - Idempotent: skips when an order with same subscription_id+delivery_date
+            already exists.
+          - Orders are marked payment_status="paid" (subscription billing is
+            collected upfront via AutoPay).
+          - source="subscription", payment_method="autopay", status="received".
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL 9 TESTS PASSED - Daily generation working correctly:
+          
+          - First generation call: created=1, skipped=0
+          - Second generation call (idempotent test): created=0, skipped=1
+          - Generated orders have correct attributes:
+            * source = "subscription" ✓
+            * payment_status = "paid" ✓
+            * payment_method = "autopay" ✓
+            * status = "received" ✓
+          
+          Idempotency verified: duplicate calls don't create duplicate orders.
+          Orders are correctly marked as paid (AutoPay billing upfront).
+
+  - task: "Product out_of_stock + pre-order + hard delete + stock-status"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - ProductIn now supports `out_of_stock`, `next_arrival_at`, `accept_preorders`.
+          - PUT /api/admin/products/{pid}/stock-status (admin/manager) — partial update
+            of those 3 fields.
+          - DELETE /api/admin/products/{pid}/hard — permanent removal (past orders keep
+            their snapshot of the product). Existing soft-disable DELETE retained.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL 8 TESTS PASSED - Product stock management working correctly:
+          
+          - PUT /api/admin/products/{pid}/stock-status: Returns 200
+          - Updated fields verified:
+            * out_of_stock = true ✓
+            * next_arrival_at = "2026-09-01 09:00" ✓
+            * accept_preorders = true ✓
+          - DELETE /api/admin/products/{pid}/hard: Returns 200
+          - Delete response: deleted=true ✓
+          - GET /products/{pid} after delete: Returns 404 ✓
+          - Old orders preserve product snapshot (verified)
+          
+          Both endpoints working correctly. Hard delete is permanent but
+          past orders retain their product data.
+
+  - task: "Expanded app settings (delivery windows, referral trigger, support, app link)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New fields in app_settings + SettingsIn + GET /api/settings (public subset):
+            - morning_window_start / morning_window_end
+            - evening_window_start / evening_window_end
+            - referral_trigger ∈ {signup, first_order, first_subscription}
+            - referral_reward_amount
+            - app_download_link
+            - support_phone / support_phone_alt / support_email
+          PUT /api/admin/settings validates referral_trigger value.
+
+  - task: "Referral trigger gating"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - New helper _maybe_award_referral(user, trigger) credits the referring user
+            once. Sets user.referral_reward_credited=true to prevent double awards.
+          - Hooked into:
+              register()              → trigger="signup"
+              checkout()              → trigger="first_order"
+              confirm_payment()       → trigger="first_order"
+              create_sub()            → trigger="first_subscription"
+          - Reward amount comes from settings.referral_reward_amount (default ₹50).
+
+agent_communication:
+  - agent: "main"
+    message: |
+      BACKEND CHANGES READY FOR TESTING.
+
+      Auth: OTP 123456 works for any phone in dev mode (Twilio not configured).
+      Demo accounts (from test_credentials.md / seed):
+        Customer  9000000001
+        Agent     9000000002
+        Admin     6398213389
+
+      KEY THINGS TO TEST (in priority order):
+
+      1) FIRST-ORDER DISCOUNT BUG FIX (the user-reported bug)
+         a. Login as a BRAND NEW customer (any unused phone, e.g. 9123456701).
+            Register → addresses[0] auto-created. Add an item to cart, checkout.
+            EXPECT: response.first_order_bonus > 0; user.first_order_discount_consumed
+                    becomes true (visible via /api/auth/me).
+         b. Add another item, checkout again WITHOUT paying the first order.
+            EXPECT: response.first_order_bonus == 0. The previous bug would have
+                    re-applied the discount because payment_status is still "pending".
+         c. Now confirm payment on the first order. Try a third checkout.
+            EXPECT: still first_order_bonus == 0.
+
+      2) INVENTORY DECREMENT ON DELIVERED
+         a. Pick a product, note its stock = S.
+         b. Login as customer, cart → checkout (qty 2).
+         c. Login as admin, PUT /api/admin/orders/{oid}/status {"status":"delivered"}.
+         d. GET /api/products/{pid} → stock should be S - 2.
+         e. PUT /api/admin/orders/{oid}/status {"status":"delivered"} AGAIN.
+         f. GET /api/products/{pid} → stock unchanged (still S - 2). [Idempotent]
+
+      3) ADMIN ORDERS FILTERING
+         a. GET /api/admin/orders?kind=subscription → only is_subscription=true items.
+         b. GET /api/admin/orders?kind=normal → only is_subscription=false items.
+         c. GET /api/admin/orders?delivery_date=<today>   → only that date.
+         d. GET /api/admin/orders?date_from=<yesterday>&date_to=<today> → range works.
+         e. GET /api/admin/orders                         → returns all (backward compat).
+
+      4) SUBSCRIPTION CALENDAR
+         a. First create an active subscription for the demo customer:
+            POST /api/subscriptions { milk_type:"Cow Milk", product_id:"<a milk pid>",
+                                     quantity_label:"1L", quantity_ml:1000,
+                                     schedule:"morning", frequency:"daily" }
+         b. GET /api/admin/subscriptions/calendar?date_from=<today>&date_to=<+6 days>
+            EXPECT: dates[].count >= 1 on every day in the range for daily frequency.
+         c. GET /api/admin/subscriptions → list with customer info.
+
+      5) DAILY SUBSCRIPTION ORDER GENERATION
+         a. POST /api/admin/subscriptions/generate-daily?date_str=<today>
+            EXPECT: { created: >=1, skipped: 0, ... } first time.
+         b. Run same call again.
+            EXPECT: { created: 0, skipped: >=1 } (idempotent).
+         c. The generated order must have source="subscription", payment_status="paid",
+            payment_method="autopay", status="received".
+
+      6) PRODUCT OUT-OF-STOCK + HARD DELETE
+         a. PUT /api/admin/products/{pid}/stock-status { out_of_stock:true,
+            next_arrival_at:"2026-09-01 09:00", accept_preorders:true } → 200 with updated product.
+         b. DELETE /api/admin/products/{pid}/hard → { deleted:true }.
+         c. GET /api/products/{pid} → 404.
+         d. Old orders that contained this product still return its embedded snapshot.
+
+      7) EXPANDED SETTINGS
+         a. GET /api/settings (public) → should include morning_window_start,
+            morning_window_end, evening_window_start, evening_window_end,
+            app_download_link, support_phone, support_phone_alt, support_email.
+         b. PUT /api/admin/settings { referral_trigger:"signup", referral_reward_amount:75 }
+            (as admin 6398213389) → 200; subsequent GET admin/settings reflects change.
+         c. PUT /api/admin/settings { referral_trigger:"bad" } → 400.
+
+      8) REFERRAL TRIGGER GATING (sample)
+         a. Set referral_trigger="signup" via admin settings.
+         b. Register a new user with referral_code of an existing user.
+         c. The referring user's referral.reward_amount should increment by
+            referral_reward_amount. New user.referral_reward_credited=true.
+         d. Set referral_trigger="first_order". Register another new user. No reward yet.
+            Customer checks out; on checkout reward should be granted.
+
+      Report PASS/FAIL per section with HTTP statuses + key fields observed.
+      Existing tests for the previously-passed features should still pass.
 
 agent_communication:
   - agent: "main"
