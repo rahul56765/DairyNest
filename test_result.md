@@ -547,23 +547,223 @@ frontend_old:
 
 metadata:
   created_by: "main_agent"
-  version: "1.5"
-  test_sequence: 7
+  version: "1.6"
+  test_sequence: 8
   run_ui: false
 
 test_plan:
   current_focus:
-    - "First-order discount BUG FIX (consumed flag)"
-    - "Inventory auto-decrement on delivered"
-    - "Admin orders filter: kind, delivery_date, date_from, date_to"
-    - "Subscription calendar endpoint"
-    - "Daily subscription order generation"
-    - "Product out-of-stock + hard delete endpoints"
-    - "Expanded app settings (windows, referral trigger, support, app link)"
-    - "Referral trigger gating (signup/first_order/first_subscription)"
+    - "Subscription UX overhaul: weekly/monthly creates real subscription (not 30 cart items)"
+    - "Customer subscription calendar endpoint (past/today/upcoming)"
+    - "Subscription start_date / end_date / commitment_days respected by _sub_is_due_on"
+    - "Startup auto-generation of today's subscription orders"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
+
+backend_new_v16:
+  - task: "SubscriptionIn supports commitment_days; end_date computed automatically"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          POST /api/subscriptions now accepts optional `commitment_days` (e.g. 7 for
+          weekly, 30 for monthly). Server computes `end_date = today + commitment_days - 1`
+          and persists both `start_date` (today) and `end_date`. Subs without commitment
+          remain open-ended (end_date null). After creation it also runs
+          generate_subscription_orders_for_date(today) so today's order shows up
+          immediately in customer Orders.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL TESTS PASSED (12/12):
+          
+          Test 1a-b: POST /api/subscriptions with commitment_days=7
+          - Returns 200 with subscription object
+          - start_date = today (2026-06-25) ✓
+          - end_date = today+6 (2026-07-01) ✓
+          - commitment_days stored correctly (7) ✓
+          
+          Test 1c: POST /api/subscriptions with commitment_days=30
+          - Returns 200 with subscription object
+          - end_date = today+29 (2026-07-24) ✓
+          
+          Test 1d: Today's order auto-generation
+          - GET /api/orders shows today's order immediately after subscription creation ✓
+          - Order attributes verified:
+            * source = "subscription" ✓
+            * payment_method = "autopay" ✓
+            * payment_status = "paid" ✓
+            * status = "received" ✓
+            * subscription_id matches created subscription ✓
+          
+          The in-handler call to generate_subscription_orders_for_date(today) works correctly.
+
+  - task: "Customer subscription calendar endpoint"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          GET /api/subscriptions/{sid}/calendar?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+          (defaults: past 30d + future 30d). Returns:
+            {
+              subscription, from, to,
+              expected_time (HH:MM–HH:MM from settings.morning/evening windows
+                             based on the sub's schedule),
+              delivered_count, upcoming_count,
+              days: [{date, is_due, status: past_delivered|past_failed|past_missed|
+                                            today|upcoming|skipped|out_of_range,
+                      expected_time, actual_time, order_id, order_status}]
+            }
+          Past dates with delivered orders → status=past_delivered + actual_time.
+          Future dates that fall on sub's frequency → status=upcoming + expected_time.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL TESTS PASSED (13/13):
+          
+          Test 2a: GET /api/subscriptions/{sid}/calendar (default range)
+          - Returns 200 with calendar object ✓
+          - All required fields present: subscription, from, to, expected_time, delivered_count, upcoming_count, days ✓
+          - expected_time format correct: "08:00–10:00" (morning window from settings) ✓
+          - upcoming_count >= 6 (got 7 for 7-day commitment) ✓
+          - days array has 61 entries (30 past + today + 30 future) ✓
+          
+          Today's entry verification:
+          - status = "today" ✓
+          - is_due = true ✓
+          - order_id present (today's auto-generated order) ✓
+          
+          Days beyond end_date verification:
+          - status = "out_of_range" ✓
+          - is_due = false ✓
+          
+          Test 2b: GET calendar with explicit date range
+          - Returns 200 ✓
+          - Correct number of days returned (4 days for 4-day range) ✓
+          
+          Test 2c: Calendar ownership
+          - Admin accessing customer's calendar returns 404 ✓
+
+  - task: "_sub_is_due_on now respects start_date / end_date"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - Uses sub.start_date when present (else falls back to created_at).
+          - If sub.end_date set (commitment), dates after that return False.
+          - Daily generation + calendar both go through this helper, so they stay
+            in sync.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL TESTS PASSED (5/5):
+          
+          Test 3b: Admin calendar for dates beyond commitment (today+10)
+          - GET /api/admin/subscriptions/calendar returns 200 ✓
+          - 7-day subscription correctly EXCLUDED from dates beyond end_date ✓
+          - Verified subscription with end_date=2026-07-01 does NOT appear in calendar for 2026-07-05 ✓
+          
+          Test 3c: generate-daily for date beyond commitment
+          - POST /api/admin/subscriptions/generate-daily?date_str=2026-07-05 returns 200 ✓
+          - No order created for 7-day subscription on date beyond commitment ✓
+          - Other subscriptions (30-day, open-ended) correctly created orders ✓
+          
+          The _sub_is_due_on helper correctly enforces end_date boundaries.
+          Subscriptions with commitment_days do NOT generate orders past their end_date.
+
+  - task: "Startup auto-generation of today's subscription orders"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          on_startup() now calls generate_subscription_orders_for_date(date.today())
+          right after seed(). Server log on startup:
+            "Subscription daily generation on startup: {'date': '...',
+              'created': N, 'skipped': M, 'subscriptions_seen': X}"
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ VERIFIED:
+          
+          Backend startup logs show successful daily generation:
+          ```
+          INFO:dairynest:Subscription daily generation on startup: 
+            {'date': '2026-06-25', 'created': 0, 'skipped': 1, 'subscriptions_seen': 1}
+          ```
+          
+          The on_startup() event handler correctly:
+          - Calls generate_subscription_orders_for_date(date.today()) ✓
+          - Logs the result with date, created count, skipped count, and subscriptions seen ✓
+          - Runs after seed() completes ✓
+          - Handles idempotency (skipped=1 when order already exists) ✓
+
+agent_communication:
+  - agent: "main"
+    message: |
+      v1.6 BACKEND READY FOR TESTING (subscription UX overhaul).
+
+      KEY THINGS TO TEST:
+
+      1) SubscriptionIn.commitment_days
+         a. POST /api/subscriptions as the demo customer (9000000001) with:
+            { product_id:<a milk pid>, milk_type:"Cow Milk", quantity_label:"1L",
+              quantity_ml:1000, schedule:"morning", frequency:"daily",
+              commitment_days:7 }
+         b. Response should include start_date=today, end_date=today+6 days.
+         c. Repeat with commitment_days=30 → end_date=today+29.
+         d. After creation, GET /api/orders should show TODAY's auto-generated
+            subscription order (source="subscription", payment_method="autopay",
+            payment_status="paid", status="received"). This proves the in-handler
+            generate_subscription_orders_for_date call.
+
+      2) Customer calendar — GET /api/subscriptions/{sid}/calendar
+         a. Default range (no params): should span ~60 days. Expect:
+              - delivered_count = 0 (initially)
+              - upcoming_count > 0 (>= commitment_days for daily)
+              - days[i].status for today = "today"
+              - days[i].status for tomorrow (within commitment) = "upcoming"
+              - days[i].status for past dates (before start_date) = "out_of_range"
+              - expected_time matches morning window from settings
+         b. With explicit ?date_from=...&date_to=... ranges should work.
+         c. Admin user cannot access other users' subscription calendars (404).
+
+      3) End-date enforcement
+         a. Create a subscription with commitment_days=7 and frequency="daily".
+         b. GET /api/admin/subscriptions/calendar?date_from=<today+10>&date_to=<today+12>
+            should show count=0 (out of commitment window).
+         c. POST /api/admin/subscriptions/generate-daily?date_str=<today+10>
+            should return created=0 (since sub is out of range).
+
+      4) Today's order linking
+         a. Mark today's auto-generated order as delivered:
+            PUT /api/admin/orders/{oid}/status {"status":"delivered"}
+         b. GET /api/subscriptions/{sid}/calendar → for today:
+              status="today" (still "today" because cur == today branch comes before
+              past_delivered check). For yesterday it would be past_delivered.
+            ALTERNATIVE: query a date in the past — verify past_delivered + order_id.
+
+      5) Permissions
+         a. /api/subscriptions/{sid}/calendar without auth → 401.
+         b. /api/subscriptions/{sid}/calendar of another customer's sid → 404.
+
+      All earlier v1.5 tests must still pass (no regression).
 
 backend_new:
   - task: "First-order discount BUG FIX — consumed flag"

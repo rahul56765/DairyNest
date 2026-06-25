@@ -225,7 +225,8 @@ class SubscriptionIn(BaseModel):
     quantity_label: str
     quantity_ml: int
     schedule: str  # morning / evening / both
-    frequency: str  # daily / alternate / weekly
+    frequency: str  # daily / alternate / weekly / monthly
+    commitment_days: Optional[int] = None  # 7 / 30 / null=open-ended. End date computed from this.
 
 
 class SubModify(BaseModel):
@@ -234,6 +235,7 @@ class SubModify(BaseModel):
     milk_type: Optional[str] = None
     schedule: Optional[str] = None
     frequency: Optional[str] = None
+    commitment_days: Optional[int] = None
 
 
 class SkipRange(BaseModel):
@@ -562,6 +564,10 @@ async def my_subs(user=Depends(get_current_user)):
 async def create_sub(body: SubscriptionIn, user=Depends(get_current_user)):
     sid = new_id()
     price = sub_price(body.milk_type, body.quantity_ml, body.schedule)
+    # Compute end_date if a commitment is specified (e.g., 7-day weekly, 30-day monthly).
+    end_date_iso: Optional[str] = None
+    if body.commitment_days and body.commitment_days > 0:
+        end_date_iso = (date.today() + timedelta(days=int(body.commitment_days) - 1)).isoformat()
     sub = {
         "id": sid,
         "user_id": user["id"],
@@ -571,6 +577,9 @@ async def create_sub(body: SubscriptionIn, user=Depends(get_current_user)):
         "quantity_ml": body.quantity_ml,
         "schedule": body.schedule,
         "frequency": body.frequency,
+        "commitment_days": body.commitment_days or None,
+        "start_date": date.today().isoformat(),
+        "end_date": end_date_iso,
         "status": "active",
         "price_per_delivery": price,
         "skip_dates": [],
@@ -581,7 +590,122 @@ async def create_sub(body: SubscriptionIn, user=Depends(get_current_user)):
     await db.subscriptions.insert_one(sub)
     # Referral: trigger reward on first_subscription if configured
     await _maybe_award_referral(user, trigger="first_subscription")
+    # Immediately seed today's order so it shows up in customer's Orders list.
+    try:
+        await generate_subscription_orders_for_date(date.today())
+    except Exception as _e:
+        logger.warning(f"Failed to seed today's sub order: {_e}")
     return clean(sub)
+
+
+@api.get("/subscriptions/{sid}/calendar")
+async def my_sub_calendar(
+    sid: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    """Customer calendar view for one of their subscriptions.
+
+    Returns each date in the range with:
+      - status: "past_delivered" | "past_failed" | "today" | "upcoming" | "skipped" | "out_of_range"
+      - expected_time: HH:MM–HH:MM window from settings (morning/evening/both)
+      - actual_time:   delivery_proof.at (if delivered) — ISO timestamp
+      - order_id:      linked real order id (if any)
+      - is_due:        bool — whether subscription is scheduled for this date
+    """
+    sub = await db.subscriptions.find_one({"id": sid, "user_id": user["id"]})
+    if not sub:
+        raise HTTPException(404, "Subscription not found")
+
+    # Default range: a window spanning past 30 days and future 30 days
+    today = date.today()
+    try:
+        d_from = date.fromisoformat(date_from) if date_from else (today - timedelta(days=30))
+        d_to = date.fromisoformat(date_to) if date_to else (today + timedelta(days=30))
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be YYYY-MM-DD")
+    if d_to < d_from:
+        raise HTTPException(400, "date_to must be >= date_from")
+
+    settings = await get_app_settings()
+    sched = (sub.get("schedule") or "morning").lower()
+    if sched == "morning":
+        expected_time = f"{settings.get('morning_window_start', '06:00')}–{settings.get('morning_window_end', '10:00')}"
+    elif sched == "evening":
+        expected_time = f"{settings.get('evening_window_start', '17:00')}–{settings.get('evening_window_end', '20:00')}"
+    else:
+        expected_time = (
+            f"AM {settings.get('morning_window_start', '06:00')}–{settings.get('morning_window_end', '10:00')}"
+            f" · PM {settings.get('evening_window_start', '17:00')}–{settings.get('evening_window_end', '20:00')}"
+        )
+
+    # Pre-fetch all orders for this subscription in the range
+    orders = await db.orders.find({
+        "user_id": user["id"],
+        "subscription_id": sid,
+        "delivery_date": {"$gte": d_from.isoformat(), "$lte": d_to.isoformat()},
+    }).to_list(500)
+    omap: Dict[str, Dict[str, Any]] = {o["delivery_date"]: o for o in orders}
+
+    skip_set = set(sub.get("skip_dates") or [])
+    days = []
+    cur = d_from
+    delivered_count = 0
+    upcoming_count = 0
+    while cur <= d_to:
+        iso_d = cur.isoformat()
+        ord_doc = omap.get(iso_d)
+        is_due = _sub_is_due_on(sub, cur)
+        actual_time = None
+        order_id = None
+        order_status = None
+        if ord_doc:
+            order_id = ord_doc.get("id")
+            order_status = ord_doc.get("status")
+            actual_time = (ord_doc.get("delivery_proof") or {}).get("at")
+
+        if iso_d in skip_set:
+            status = "skipped"
+        elif cur < today:
+            if ord_doc and ord_doc.get("status") == "delivered":
+                status = "past_delivered"
+                delivered_count += 1
+            elif ord_doc and ord_doc.get("status") in ("failed", "cancelled"):
+                status = "past_failed"
+            elif is_due:
+                status = "past_missed"
+            else:
+                status = "out_of_range"
+        elif cur == today:
+            status = "today"
+            if is_due:
+                upcoming_count += 1
+        else:  # future
+            status = "upcoming" if is_due else "out_of_range"
+            if is_due:
+                upcoming_count += 1
+
+        days.append({
+            "date": iso_d,
+            "is_due": is_due,
+            "status": status,
+            "expected_time": expected_time if is_due else None,
+            "actual_time": actual_time,
+            "order_id": order_id,
+            "order_status": order_status,
+        })
+        cur += timedelta(days=1)
+
+    return {
+        "subscription": clean(sub),
+        "from": d_from.isoformat(),
+        "to": d_to.isoformat(),
+        "expected_time": expected_time,
+        "delivered_count": delivered_count,
+        "upcoming_count": upcoming_count,
+        "days": days,
+    }
 
 
 @api.put("/subscriptions/{sid}")
@@ -855,19 +979,38 @@ def _sub_is_due_on(sub: Dict[str, Any], d: date) -> bool:
     """Return True if this subscription is expected to deliver on date `d`.
 
     Frequency: daily, alternate, weekly, monthly.
-    Respects skip_dates (list of YYYY-MM-DD strings) and status=='active'.
+    Respects skip_dates (list of YYYY-MM-DD strings), status=='active', and the
+    optional `end_date` (inclusive) when a commitment_days window is set.
     """
     if sub.get("status") != "active":
         return False
     iso_d = d.isoformat()
     if iso_d in (sub.get("skip_dates") or []):
         return False
+    # Respect commitment end date (if any)
+    end_str = sub.get("end_date")
+    if end_str:
+        try:
+            end = date.fromisoformat(end_str)
+            if d > end:
+                return False
+        except Exception:
+            pass
     freq = (sub.get("frequency") or "daily").lower()
-    created_at_str = sub.get("created_at") or ""
-    try:
-        start = datetime.fromisoformat(created_at_str.replace("Z", "+00:00")).date()
-    except Exception:
-        start = d
+    # Prefer explicit start_date, else fall back to created_at date
+    start_str = sub.get("start_date")
+    start: Optional[date] = None
+    if start_str:
+        try:
+            start = date.fromisoformat(start_str)
+        except Exception:
+            start = None
+    if not start:
+        created_at_str = sub.get("created_at") or ""
+        try:
+            start = datetime.fromisoformat(created_at_str.replace("Z", "+00:00")).date()
+        except Exception:
+            start = d
     if d < start:
         return False
     delta = (d - start).days
@@ -878,7 +1021,6 @@ def _sub_is_due_on(sub: Dict[str, Any], d: date) -> bool:
     if freq == "weekly":
         return delta % 7 == 0
     if freq == "monthly":
-        # same day-of-month as start, fall back to last day
         try:
             return d.day == start.day
         except Exception:
@@ -2204,6 +2346,13 @@ app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"],
 @app.on_event("startup")
 async def on_startup():
     await seed()
+    # Auto-create today's subscription delivery orders so they appear in users'
+    # Orders list and the admin "Normal Orders" pipeline without manual action.
+    try:
+        result = await generate_subscription_orders_for_date(date.today())
+        logger.info(f"Subscription daily generation on startup: {result}")
+    except Exception as e:
+        logger.warning(f"Subscription daily generation failed on startup: {e}")
 
 
 @app.on_event("shutdown")
