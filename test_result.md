@@ -107,6 +107,71 @@ user_problem_statement: |
   visible. Subscription orders should be highlighted prominently.
 
 backend:
+  - task: "Banners CRUD endpoints (admin-managed home banners)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New `banners` collection + endpoints:
+            - GET  /api/banners (public; only active, sorted by sort_order asc then created_at desc)
+            - GET  /api/admin/banners (admin/manager with 'marketing' permission) — lists all
+            - POST /api/admin/banners — create. Accepts BannerIn:
+                {title, subtitle, image (base64 data URI OR https URL),
+                 cta_label, cta_route, badge, active, sort_order}
+            - PUT  /api/admin/banners/{id} — update (same shape)
+            - PUT  /api/admin/banners/{id}/toggle — flip active
+            - DELETE /api/admin/banners/{id} — remove
+          Image is stored as a string (no validation on URI scheme) so admin can
+          paste a base64 data URI from the new image picker or an https URL.
+          Permission gating: marketing-permitted managers OR full admin can manage,
+          everyone else gets 403 on /admin/*. Public GET stays open.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ ALL 40 TESTS PASSED - Comprehensive validation complete:
+          
+          SECTION A (Public Listing) - 4/4 PASSED:
+          - GET /api/banners returns 200 with list of banners
+          - All returned banners have active=true (inactive banners correctly filtered)
+          - Public endpoint accessible without authentication
+          
+          SECTION B (Admin CRUD Operations) - 23/23 PASSED:
+          - POST /api/admin/banners creates banner with base64 image (data URI preserved verbatim)
+          - Response includes id and created_at fields
+          - GET /api/admin/banners returns all banners (including inactive)
+          - PUT /api/admin/banners/{id} updates all fields correctly (title, image, sort_order, etc.)
+          - Image accepts both base64 data URI and https URL
+          - PUT /api/admin/banners/{id}/toggle flips active status (true→false→true)
+          - Inactive banners correctly excluded from public GET /api/banners
+          - Active banners correctly included in public GET /api/banners
+          - DELETE /api/admin/banners/{id} returns {"deleted": true}
+          - Operations on deleted banner return 404
+          
+          SECTION C (Permission Gating) - 3/3 PASSED:
+          - POST /api/admin/banners as customer returns 403
+          - GET /api/admin/banners as customer returns 403
+          - DELETE /api/admin/banners/non-existent-id returns 404
+          
+          SECTION D (Public Sorting) - 3/3 PASSED:
+          - Created 3 banners with sort_order 5, 1, 10
+          - GET /api/banners returns them in ascending sort_order: [1, 5, 10]
+          - Sorting works correctly (sort_order asc, then created_at desc)
+          
+          SECTION E (Regression Tests) - 7/7 PASSED:
+          - GET /api/products still works (14 products)
+          - GET /api/admin/orders still works (12 orders)
+          - Order placement flow works (cart add + checkout)
+          - No regressions introduced by banners feature
+          
+          All endpoints working correctly with proper permission gating, sorting,
+          and image handling (both base64 data URI and https URL).
+
   - task: "Agent route enriched with customer info (name + phone)"
     implemented: true
     working: true
@@ -483,11 +548,12 @@ frontend_old:
 metadata:
   created_by: "main_agent"
   version: "1.4"
-  test_sequence: 5
+  test_sequence: 6
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Banners CRUD endpoints (admin-managed home banners)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -641,3 +707,44 @@ agent_communication:
          - CRITICAL BUG FIX VERIFIED
       
       No issues found. All endpoints working as expected.
+
+  - agent: "testing"
+    message: |
+      ✅ BANNERS CRUD TESTING COMPLETE - ALL 40 TESTS PASSED
+      
+      Tested all 5 sections (A-E) as requested in the review:
+      
+      ✅ Section A (4 tests): Public banner listing working
+         - GET /api/banners returns 200 with list
+         - All returned banners have active=true (inactive correctly filtered)
+         - Public endpoint accessible without authentication
+      
+      ✅ Section B (23 tests): Admin CRUD operations working
+         - POST /api/admin/banners creates banner with base64 image
+         - Image preserved verbatim (both data URI and https URL)
+         - GET /api/admin/banners returns all banners (including inactive)
+         - PUT /api/admin/banners/{id} updates all fields correctly
+         - PUT /api/admin/banners/{id}/toggle flips active status
+         - Inactive banners excluded from public listing
+         - Active banners included in public listing
+         - DELETE /api/admin/banners/{id} returns {"deleted": true}
+         - Operations on deleted banner return 404
+      
+      ✅ Section C (3 tests): Permission gating working
+         - POST /api/admin/banners as customer returns 403
+         - GET /api/admin/banners as customer returns 403
+         - DELETE non-existent banner returns 404
+      
+      ✅ Section D (3 tests): Public sorting working
+         - Created 3 banners with sort_order 5, 1, 10
+         - GET /api/banners returns them sorted: [1, 5, 10]
+         - Sorting by sort_order asc, then created_at desc verified
+      
+      ✅ Section E (7 tests): Regression tests passing
+         - GET /api/products still works (14 products)
+         - GET /api/admin/orders still works (12 orders)
+         - Order placement flow works (cart add + checkout)
+         - No regressions introduced
+      
+      All banner endpoints working correctly with proper permission gating,
+      sorting, and image handling. No issues found.

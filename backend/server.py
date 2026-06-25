@@ -477,6 +477,66 @@ async def get_product(pid: str):
     return clean(p)
 
 
+# ------------------------- Banners -------------------------
+class BannerIn(BaseModel):
+    title: str = ""
+    subtitle: str = ""
+    image: str = ""  # base64 data URI OR https URL
+    cta_label: str = ""
+    cta_route: str = ""  # e.g. "/catalog?type=milk" or "/(customer)/subscription"
+    badge: str = ""  # e.g. "LIMITED OFFER"
+    active: bool = True
+    sort_order: int = 0
+
+
+@api.get("/banners")
+async def list_banners():
+    """Public — returns only ACTIVE banners sorted by sort_order asc, then newest first."""
+    banners = await db.banners.find({"active": True}).sort([("sort_order", 1), ("created_at", -1)]).to_list(50)
+    return [clean(b) for b in banners]
+
+
+@api.get("/admin/banners")
+async def admin_list_banners(user=Depends(admin_or_manager("marketing"))):
+    banners = await db.banners.find({}).sort([("sort_order", 1), ("created_at", -1)]).to_list(200)
+    return [clean(b) for b in banners]
+
+
+@api.post("/admin/banners")
+async def admin_create_banner(body: BannerIn, user=Depends(admin_or_manager("marketing"))):
+    b = body.model_dump()
+    b["id"] = new_id()
+    b["created_at"] = iso(now_utc())
+    await db.banners.insert_one(b)
+    return clean(b)
+
+
+@api.put("/admin/banners/{bid}")
+async def admin_update_banner(bid: str, body: BannerIn, user=Depends(admin_or_manager("marketing"))):
+    existing = await db.banners.find_one({"id": bid})
+    if not existing:
+        raise HTTPException(404, "Banner not found")
+    await db.banners.update_one({"id": bid}, {"$set": body.model_dump()})
+    return clean(await db.banners.find_one({"id": bid}))
+
+
+@api.put("/admin/banners/{bid}/toggle")
+async def admin_toggle_banner(bid: str, user=Depends(admin_or_manager("marketing"))):
+    existing = await db.banners.find_one({"id": bid})
+    if not existing:
+        raise HTTPException(404, "Banner not found")
+    await db.banners.update_one({"id": bid}, {"$set": {"active": not existing.get("active", False)}})
+    return clean(await db.banners.find_one({"id": bid}))
+
+
+@api.delete("/admin/banners/{bid}")
+async def admin_delete_banner(bid: str, user=Depends(admin_or_manager("marketing"))):
+    res = await db.banners.delete_one({"id": bid})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Banner not found")
+    return {"deleted": True}
+
+
 # ------------------------- Subscriptions -------------------------
 def sub_price(milk_type: str, qty_ml: int, schedule: str):
     base = {"Cow Milk": 0.06, "Buffalo Milk": 0.08, "A2 Milk": 0.12}.get(milk_type, 0.06)

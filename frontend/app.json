@@ -11,7 +11,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Detect your address for accurate delivery"
+        "NSLocationWhenInUseUsageDescription": "Detect your address for accurate delivery",
+        "NSPhotoLibraryUsageDescription": "Upload product and banner images"
       }
     },
     "android": {
@@ -20,7 +21,7 @@
         "backgroundColor": "#FFFFFF"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "VIBRATE", "RECEIVE_BOOT_COMPLETED", "WAKE_LOCK"],
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "VIBRATE", "RECEIVE_BOOT_COMPLETED", "WAKE_LOCK", "READ_MEDIA_IMAGES"],
       "useNextNotificationsApi": true
     },
     "web": {
@@ -51,6 +52,12 @@
           "icon": "./assets/images/notification-icon.png",
           "color": "#3A5940",
           "defaultChannel": "default"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Upload product and banner images"
         }
       ]
     ],

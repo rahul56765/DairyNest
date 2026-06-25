@@ -16,9 +16,10 @@ import {
   TicketsTab,
   NotifyTab,
   SettingsTab,
+  BannersTab,
 } from "@/src/components/management";
 
-const TABS = ["Products", "Inventory", "Coupons", "Managers", "Agents", "Notify", "Settings", "Referrals", "AI", "Tickets"];
+const TABS = ["Products", "Banners", "Inventory", "Coupons", "Managers", "Agents", "Notify", "Settings", "Referrals", "AI", "Tickets"];
 
 export default function AdminMore() {
   const insets = useSafeAreaInsets();
@@ -33,6 +34,7 @@ export default function AdminMore() {
       </View>
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing["3xl"] }}>
         {tab === "Products" && <ProductsTab />}
+        {tab === "Banners" && <BannersTab />}
         {tab === "Inventory" && <InventoryTab />}
         {tab === "Coupons" && <CouponsTab />}
         {tab === "Managers" && <ManagersTab />}

@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
-import { View, StyleSheet, ScrollView, TextInput, Pressable, Modal, KeyboardAvoidingView, Platform, Switch } from "react-native";
-import { Sparkle, Plus, Pencil, X, Power, ShieldCheck, UserPlus, Trash, Check } from "phosphor-react-native";
+import { View, StyleSheet, ScrollView, TextInput, Pressable, Modal, KeyboardAvoidingView, Platform, Switch, Image as RNImage } from "react-native";
+import { Sparkle, Plus, Pencil, X, Power, ShieldCheck, UserPlus, Trash, Check, Megaphone } from "phosphor-react-native";
 import { api } from "@/src/api";
 import { useToast } from "@/src/components/toast";
 import { colors, spacing, radius, type, font } from "@/src/theme";
 import { Txt, Card, Loading, Row, Badge, Button, QtyStepper } from "@/src/components/ui";
+import ImageUploadField from "@/src/components/image-upload";
 
 export const MANAGER_MODULES = ["customers", "orders", "products", "inventory", "marketing", "support", "reports"];
 
@@ -220,7 +221,14 @@ function ProductFormModal({ visible, initial, onClose, onSaved }: { visible: boo
             <FormField label="Weight (e.g. 1 L)" testID="pf-weight" value={form.weight} onChange={(v) => set("weight", v)} />
             <FormField label="Unit" testID="pf-unit" value={form.unit} onChange={(v) => set("unit", v)} />
             <FormField label="Farm source" testID="pf-farm" value={form.farm_source} onChange={(v) => set("farm_source", v)} />
-            <FormField label="Image URL" testID="pf-image" value={form.image} onChange={(v) => set("image", v)} />
+            <ImageUploadField
+              label="Product image"
+              testID="pf-image"
+              value={form.image || ""}
+              onChange={(uri) => set("image", uri)}
+              aspect={[1, 1]}
+              hint="Square crop works best (1:1)"
+            />
             <Row style={{ justifyContent: "space-between", marginVertical: spacing.sm }}>
               <Txt weight="medium">Organic</Txt>
               <Switch testID="pf-organic" value={!!form.organic} onValueChange={(v) => set("organic", v)} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} />
@@ -627,6 +635,141 @@ export function FormField({ label, value, onChange, keyboardType, testID, autoCa
   );
 }
 
+// ---------- Banners (Home page banners) ----------
+export function BannersTab() {
+  const toast = useToast();
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<any | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const load = useCallback(async () => {
+    try { setItems(await api.get("/admin/banners")); } catch (e: any) { toast.show(e.message, "error"); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = async (id: string) => {
+    try { await api.put(`/admin/banners/${id}/toggle`); load(); }
+    catch (e: any) { toast.show(e.message, "error"); }
+  };
+  const remove = async (id: string) => {
+    try { await api.del(`/admin/banners/${id}`); toast.show("Banner deleted", "info"); load(); }
+    catch (e: any) { toast.show(e.message, "error"); }
+  };
+
+  if (loading) return <Loading />;
+  return (
+    <View>
+      <Button
+        title="Add Banner"
+        icon={<Plus size={18} color={colors.onBrandPrimary} weight="bold" />}
+        onPress={() => setCreating(true)}
+        testID="add-banner-button"
+        style={{ marginBottom: spacing.md, height: 44 }}
+      />
+      {items.length === 0 && (
+        <Card style={{ alignItems: "center", paddingVertical: spacing.xl }}>
+          <Megaphone size={36} color={colors.muted} />
+          <Txt color={colors.muted} style={{ marginTop: spacing.sm }}>No banners yet. Add one to promote on the home page.</Txt>
+        </Card>
+      )}
+      {items.map((b) => (
+        <Card key={b.id} style={{ marginBottom: spacing.md }} testID={`banner-${b.id}`}>
+          {!!b.image && (
+            <RNImage source={{ uri: b.image }} style={styles.bannerPreview} resizeMode="cover" />
+          )}
+          <Row style={{ justifyContent: "space-between", marginTop: spacing.sm }}>
+            <View style={{ flex: 1, paddingRight: spacing.sm }}>
+              {!!b.badge && (
+                <Badge label={b.badge} color={colors.onWarning} bg={colors.warning} />
+              )}
+              <Txt weight="semibold" size={type.lg} style={{ marginTop: 4 }}>{b.title || "(Untitled)"}</Txt>
+              {!!b.subtitle && <Txt color={colors.muted} size={type.sm} numberOfLines={2}>{b.subtitle}</Txt>}
+              {!!b.cta_label && <Txt color={colors.brandPrimary} size={type.sm} style={{ marginTop: 4 }}>CTA: {b.cta_label} → {b.cta_route || "—"}</Txt>}
+              <Txt color={colors.muted} size={type.sm} style={{ marginTop: 2 }}>Order #{b.sort_order ?? 0}</Txt>
+            </View>
+            <Badge label={b.active ? "Active" : "Hidden"} color={b.active ? colors.success : colors.muted} bg={b.active ? "#E3F0E8" : colors.surfaceTertiary} />
+          </Row>
+          <Row style={{ gap: spacing.sm, marginTop: spacing.sm }}>
+            <Button title="Edit" variant="outline" onPress={() => setEditing(b)} style={{ flex: 1, height: 38 }} testID={`edit-banner-${b.id}`} />
+            <Button title={b.active ? "Hide" : "Show"} variant="outline" onPress={() => toggle(b.id)} style={{ flex: 1, height: 38 }} testID={`toggle-banner-${b.id}`} />
+            <Button title="Delete" variant="outline" onPress={() => remove(b.id)} style={{ flex: 1, height: 38 }} testID={`delete-banner-${b.id}`} />
+          </Row>
+        </Card>
+      ))}
+
+      <BannerFormModal
+        visible={creating || !!editing}
+        initial={editing}
+        onClose={() => { setCreating(false); setEditing(null); }}
+        onSaved={() => { setCreating(false); setEditing(null); load(); }}
+      />
+    </View>
+  );
+}
+
+function BannerFormModal({ visible, initial, onClose, onSaved }: { visible: boolean; initial: any; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [form, setForm] = useState<any>({});
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setForm(initial || { title: "", subtitle: "", image: "", cta_label: "Shop Now", cta_route: "/catalog?type=milk", badge: "", active: true, sort_order: 0 });
+  }, [initial]);
+
+  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  const save = async () => {
+    if (!form.title?.trim() && !form.image) return toast.show("Add at least a title or image", "error");
+    setBusy(true);
+    try {
+      const payload = { ...form, sort_order: Number(form.sort_order) || 0, active: !!form.active };
+      if (initial?.id) await api.put(`/admin/banners/${initial.id}`, payload);
+      else await api.post("/admin/banners", payload);
+      toast.show("Banner saved", "success");
+      onSaved();
+    } catch (e: any) { toast.show(e.message, "error"); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalWrap}>
+        <View style={styles.modal}>
+          <Row style={{ justifyContent: "space-between", marginBottom: spacing.md }}>
+            <Txt display weight="semibold" size={type.xl}>{initial?.id ? "Edit Banner" : "New Banner"}</Txt>
+            <Pressable onPress={onClose} hitSlop={10} testID="banner-modal-close"><X size={22} color={colors.onSurface} /></Pressable>
+          </Row>
+          <ScrollView contentContainerStyle={{ paddingBottom: spacing.lg }} keyboardShouldPersistTaps="handled">
+            <ImageUploadField
+              label="Banner image"
+              testID="bf-image"
+              value={form.image || ""}
+              onChange={(uri) => set("image", uri)}
+              aspect={[16, 9]}
+              hint="Landscape works best (16:9)"
+            />
+            <FormField label="Title" testID="bf-title" value={form.title} onChange={(v) => set("title", v)} />
+            <FormField label="Subtitle" testID="bf-subtitle" value={form.subtitle} onChange={(v) => set("subtitle", v)} />
+            <FormField label="Badge (e.g. LIMITED OFFER)" testID="bf-badge" value={form.badge} onChange={(v) => set("badge", v)} autoCaps />
+            <FormField label="Button label" testID="bf-cta-label" value={form.cta_label} onChange={(v) => set("cta_label", v)} />
+            <FormField label="Button route (e.g. /catalog?type=milk)" testID="bf-cta-route" value={form.cta_route} onChange={(v) => set("cta_route", v)} />
+            <FormField label="Sort order (lower = first)" testID="bf-sort" value={String(form.sort_order ?? 0)} onChange={(v) => set("sort_order", v)} keyboardType="numeric" />
+            <Row style={{ justifyContent: "space-between", marginVertical: spacing.sm }}>
+              <Txt weight="medium">Active (visible to customers)</Txt>
+              <Switch testID="bf-active" value={!!form.active} onValueChange={(v) => set("active", v)} trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }} />
+            </Row>
+          </ScrollView>
+          <Row style={{ gap: spacing.md, marginTop: spacing.sm }}>
+            <Button title="Cancel" variant="outline" onPress={onClose} style={{ flex: 1 }} />
+            <Button title="Save" onPress={save} loading={busy} style={{ flex: 1 }} testID="banner-save-button" />
+          </Row>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   modalWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
   modal: { backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: spacing.lg, maxHeight: "90%" },
@@ -637,4 +780,5 @@ const styles = StyleSheet.create({
   checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: colors.borderStrong, alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceSecondary },
   checkboxOn: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
   permPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm, backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.brandSecondary },
+  bannerPreview: { width: "100%", height: 140, borderRadius: radius.md, backgroundColor: colors.surfaceTertiary },
 });

@@ -23,13 +23,18 @@ export default function Home() {
   const router = useRouter();
   const { user } = useAuth();
   const [subs, setSubs] = useState<any[]>([]);
+  const [banners, setBanners] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const s = await api.get("/subscriptions");
+      const [s, b] = await Promise.all([
+        api.get("/subscriptions"),
+        api.get("/banners").catch(() => []),
+      ]);
       setSubs(s.filter((x: any) => x.status === "active"));
+      setBanners(Array.isArray(b) ? b : []);
     } catch {}
     setLoading(false);
     setRefreshing(false);
@@ -65,20 +70,61 @@ export default function Home() {
 
       <LocationBanner />
 
-      {/* Hero */}
-      <Pressable testID="hero-banner" onPress={() => router.push("/(customer)/subscription")} style={styles.hero}>
-        <Image source={{ uri: "https://images.unsplash.com/photo-1768850418252-37af725e46bb?w=900&q=80" }} style={StyleSheet.absoluteFill} contentFit="cover" />
-        <LinearGradient colors={["transparent", "rgba(44,66,48,0.85)"]} style={StyleSheet.absoluteFill} />
-        <View style={styles.heroContent}>
-          <Badge label="LIMITED OFFER" color={colors.surfaceInverse} bg={colors.warning} />
-          <Txt display weight="semibold" size={type["2xl"]} color={colors.onBrandPrimary} style={{ marginTop: spacing.sm }}>
-            Get 20% off your{"\n"}first milk subscription
-          </Txt>
-          <View style={styles.heroCta}>
-            <Txt weight="semibold" color={colors.brandPrimary}>Subscribe Now →</Txt>
+      {/* Hero — admin-managed banners carousel (if any), else default offer */}
+      {banners.length > 0 ? (
+        <ScrollView
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          style={{ marginTop: spacing.sm }}
+        >
+          {banners.map((b) => (
+            <Pressable
+              key={b.id}
+              testID={`banner-${b.id}`}
+              onPress={() => b.cta_route ? router.push(b.cta_route as any) : null}
+              style={styles.hero}
+            >
+              {!!b.image && (
+                <Image source={{ uri: b.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
+              )}
+              <LinearGradient colors={["transparent", "rgba(44,66,48,0.85)"]} style={StyleSheet.absoluteFill} />
+              <View style={styles.heroContent}>
+                {!!b.badge && <Badge label={b.badge} color={colors.surfaceInverse} bg={colors.warning} />}
+                {!!b.title && (
+                  <Txt display weight="semibold" size={type["2xl"]} color={colors.onBrandPrimary} style={{ marginTop: spacing.sm }} numberOfLines={2}>
+                    {b.title}
+                  </Txt>
+                )}
+                {!!b.subtitle && (
+                  <Txt color={colors.onBrandPrimary} size={type.sm} style={{ opacity: 0.9, marginTop: 4 }} numberOfLines={2}>
+                    {b.subtitle}
+                  </Txt>
+                )}
+                {!!b.cta_label && (
+                  <View style={styles.heroCta}>
+                    <Txt weight="semibold" color={colors.brandPrimary}>{b.cta_label} →</Txt>
+                  </View>
+                )}
+              </View>
+            </Pressable>
+          ))}
+        </ScrollView>
+      ) : (
+        <Pressable testID="hero-banner" onPress={() => router.push("/(customer)/subscription")} style={styles.hero}>
+          <Image source={{ uri: "https://images.unsplash.com/photo-1768850418252-37af725e46bb?w=900&q=80" }} style={StyleSheet.absoluteFill} contentFit="cover" />
+          <LinearGradient colors={["transparent", "rgba(44,66,48,0.85)"]} style={StyleSheet.absoluteFill} />
+          <View style={styles.heroContent}>
+            <Badge label="LIMITED OFFER" color={colors.surfaceInverse} bg={colors.warning} />
+            <Txt display weight="semibold" size={type["2xl"]} color={colors.onBrandPrimary} style={{ marginTop: spacing.sm }}>
+              Get 20% off your{"\n"}first milk subscription
+            </Txt>
+            <View style={styles.heroCta}>
+              <Txt weight="semibold" color={colors.brandPrimary}>Subscribe Now →</Txt>
+            </View>
           </View>
-        </View>
-      </Pressable>
+        </Pressable>
+      )}
 
       {/* Category cards */}
       <View style={styles.quickWrap}>
