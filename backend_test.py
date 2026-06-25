@@ -11,7 +11,7 @@ import sys
 from typing import Dict, Any, Optional
 
 # Backend URL from frontend/.env
-BASE_URL = "https://wonderful-feynman-7.preview.emergentagent.com/api"
+BASE_URL = "https://system-blueprint-22.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 CUSTOMER_PHONE = "9000000001"
